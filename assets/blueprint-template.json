@@ -1,0 +1,12 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "preferredVersions": { "php": "8.2", "wp": "6.7" },
+  "login": true,
+  "steps": [
+    { "step": "activateTheme", "themeFolderName": "THEME_SLUG" },
+    {
+      "step": "runPHP",
+      "code": "<?php require('/wordpress/wp-load.php'); if (!get_page_by_path('front')) { wp_insert_post(['post_title'=>'Front','post_name'=>'front','post_status'=>'publish','post_type'=>'page']); } update_option('show_on_front','page'); update_option('page_on_front', get_page_by_path('front')->ID); update_option('blogname', 'THEME_SITE_TITLE');"
+    }
+  ]
+}
