@@ -1,6 +1,6 @@
 ---
 name: wp-clone-to-block-theme
-description: Clone a public website into a WordPress block theme that reproduces layout, imagery, palette, typography, and real section content. Captures the live page via chrome-devtools MCP, downloads all referenced images, writes per-section spec files from computed styles, and dispatches parallel builder agents in git worktrees to emit one WP block pattern per section. Use when the user asks to "clone this site to WordPress", "convert to block theme", "rebuild this page as a block theme", "pixel-perfect block theme clone", or provides any URL without explicitly asking for a Wix-specific flow (for wix.com / wixsite.com URLs, prefer `wp-clone-wix-to-block-theme`).
+description: Clone a public website into a WordPress block theme that reproduces layout, imagery, palette, typography, and real section content. Captures the live page via chrome-devtools MCP, downloads all referenced images, writes per-section spec files from computed styles, and dispatches parallel builder agents in git worktrees to emit one WP block pattern per section. Handles Wix / Webflow / Squarespace / Shopify builders too — the extractor falls back to Y-band clustering when the source page has no semantic section markup. Use when the user asks to "clone this site to WordPress", "convert to block theme", "rebuild this page as a block theme", "pixel-perfect block theme clone", or provides any public URL.
 ---
 
 # Clone a website into a WordPress block theme
@@ -9,10 +9,7 @@ description: Clone a public website into a WordPress block theme that reproduces
 
 This skill turns any public URL into a WordPress block theme that reproduces the source page's layout, imagery, palette, typography, and real content — not a structural scaffold. Every generated pattern is backed by a per-section spec file extracted from computed styles with local asset paths. No placeholder text. No generic 3-column filler. If the captured section is a 10-image gallery, the generated pattern is a 10-image gallery.
 
-The workflow borrows hard-won patterns from two sources:
-
-- the Wix-specific sibling `wp-clone-wix-to-block-theme` (block-theme skeleton, section-mapping templates, brightness rule, visual-QA loop, CORS-tainted palette fallback)
-- the Next.js cloner `ai-website-cloner-template-master/.claude/skills/clone-website` (exhaustive `getComputedStyle()` extraction, interaction-model gating, spec-file contracts, **parallel dispatch in git worktrees**, **foundation-first sequencing**, **build gate at every step**, **pre-dispatch checklist**)
+The workflow builds on two proven patterns: a block-theme skeleton + section-mapping templates + brightness-based `core/cover` rule + CORS-tainted palette fallback (all bundled in this skill), and the Next.js `ai-website-cloner-template-master/.claude/skills/clone-website` conventions for exhaustive `getComputedStyle()` extraction, interaction-model gating, spec-file contracts, **parallel dispatch in git worktrees**, **foundation-first sequencing**, **build gate at every step**, and **pre-dispatch checklist**.
 
 ## Prerequisites
 
@@ -25,7 +22,7 @@ Stop and tell the user if any of these are missing.
 
 ## Workflow
 
-Seven steps in fixed order: **capture → foundation → specs → pre-dispatch check → parallel dispatch → assemble → deploy & visual QA**. Steps 2 and 5 are the two new additions over the Wix sibling; step 4 is a hard gate before step 5.
+Eight steps in fixed order: **capture → design brief → foundation → specs → pre-dispatch check → parallel dispatch → assemble → deploy & visual QA**. Step 4 is a hard gate before step 5. Step 1b (design brief) is written once, immediately after capture, and is consulted by every subsequent step.
 
 ### 1. Capture
 
@@ -36,10 +33,31 @@ Read `references/capture.md`. Produce under `./clones/<slug>/.capture/`:
 - `analysis.json` — from `scripts/extract.js` via `evaluate_script`. Contains tokens, deduped sections, nav, image inventory, and a `diagnostics.sectionStrategy` field (`'semantic' | 'y-band'`) that records which detection path ran.
 - `assets/` — every image from `analysis.json.images` downloaded via `curl -L` immediately. CDN-signed URLs expire; download before the loop moves on. Named `img-01.<ext>`, `img-02.<ext>`, ... with mapping in `assets/manifest.json`.
 - `sections/<n>.json` — one deep extract per section from `scripts/extract-section.js`. Full computed-style tree for every element, plus text and image URLs. This is the source of truth for step 3.
+- `fonts/<family>-<weight>-<style>-NN.woff2` — one WOFF2 per subset downloaded from Google Fonts for the display + body families. See `references/capture.md` step 4a.
 
-**Capture health check:** if `analysis.diagnostics.afterDedupe < 3`, the page has no recoverable section structure. Fall back to a single-pattern theme (hero cover + gallery of all downloaded images). Skip steps 3–5 and jump to step 6 with the single pattern.
+**Capture health check:** if `analysis.diagnostics.afterDedupe < 3`, the page has no recoverable section structure. Fall back to a single-pattern theme (hero cover + gallery of all downloaded images). Skip steps 3–5 and jump to step 6 with the single pattern. Step 1b still runs — the design brief is site-wide and not per-section.
+
+### 1b. Design brief
+
+Read `references/design-brief.md`. Produce **`./clones/<slug>/design.md`** from the captured tokens, palette, per-section JSONs, and desktop screenshot. The brief is a 9-section design system contract:
+
+1. Visual Theme & Atmosphere
+2. Color Palette & Roles
+3. Typography Rules
+4. Component Stylings
+5. Layout Principles
+6. Depth & Elevation
+7. Do's and Don'ts
+8. Responsive Behavior
+9. Agent Prompt Guide
+
+Every subsequent step (foundation, spec writing, dispatched builders, visual QA) reads `design.md` and keeps styling decisions consistent with it. The file is written once here and frozen during pattern work — only visual-QA iteration 3 is allowed to correct it, and when it does, all downstream artifacts must be regenerated to match.
+
+`design.md` is the skill's design contract, equivalent to how `analysis.json` is the capture contract and `specs/section-<n>.md` is the per-section contract.
 
 ### 2. Foundation (build-gated)
+
+Foundation reads `design.md` first. Sections 2, 3, 5, and 6 of the brief are the authoritative source for palette slugs, font stack, spacing scale, and shadow stack — `references/theme-tokens.md` only describes the *format* these values take in `theme.json`.
 
 **Foundation artifacts must exist before any spec is dispatched to a builder.** This guarantees every worktree can rely on `theme.json`, palette slugs, font presets, and image paths being stable.
 
@@ -47,7 +65,7 @@ Emit into `./clones/<slug>/theme/`:
 
 - `theme.json` — from `references/theme-tokens.md`, including the brightness-based `core/cover` vs `core/group` rule.
 - `style.css` — minimal theme header; description ends with "Benchmark reference only — not for publication." when the source site is third-party.
-- `assets/fonts/` — self-hosted fallback fonts from the `references/theme-tokens.md` font-substitution table.
+- `assets/fonts/` — self-hosted fonts **copied from `.capture/fonts/`** (downloaded in step 1/4a). Emit one `@font-face` block per `fonts/manifest.json` entry into `style.css`. Do **not** use `@import url('https://fonts.googleapis.com/...')` — `references/capture.md` step 4a replaces that path with local WOFF2 files.
 - `assets/` — **copy** every file from `./clones/<slug>/.capture/assets/` so the theme ships its own media.
 - `templates/index.html`, `templates/front-page.html`, `parts/header.html`, `parts/footer.html` — initialized from `assets/block-theme-skeleton/`. Pattern slugs inside `front-page.html` are left as comment placeholders; step 6 wires them up.
 
@@ -67,9 +85,11 @@ Read `references/spec-files.md`. For each section in `analysis.json.sections`, w
 
 The spec file is a contract between extraction and generation. Fill every field. If a field truly does not apply, write `n/a` — but most fields apply to most sections.
 
-**Interaction model** goes in every spec: `static`, `gallery`, `media-text`, `columns`, `cover-with-headline`, `logo-strip`, `testimonial`, `cta`, `color-block-grid`, `footer`, `nav`. This string drives template selection in step 5.
+**Interaction model** goes in every spec: `static`, `gallery`, `media-text`, `columns`, `cover-with-headline`, `logo-strip`, `testimonial`, `cta`, `blog-card-grid`, `price-list`, `color-block-grid`, `footer`, `nav`. This string drives template selection in step 5. Prefer `blog-card-grid` over `columns` for post/insight listings, and `price-list` over `columns` for services/packages — the generic `columns` template produces the wrong visual for both.
 
 **Content and assets** — spec files hold verbatim captured text and **local** asset paths (`assets/img-07.jpg`, not the CDN URL). Button labels, heading text, paragraph copy — all from the real site, not paraphrased.
+
+**Design brief references** — every spec file's **Generation instructions** section ends with a "Design brief citations" bullet list: which `design.md` subsections this section depends on. Example: "Component > Cards & Containers for shadow and radius; Typography > Card Heading for title size and weight; Color Palette > Surface & Shadows for card bg." Builders read both files in step 5.
 
 ### 4. Pre-dispatch checklist (hard gate)
 
@@ -92,7 +112,7 @@ Read `references/parallel-dispatch.md`. One builder subagent per spec file, each
 
 - Main branch owns `theme/theme.json`, `theme/style.css`, `theme/assets/`, `theme/parts/*`, `theme/templates/*`.
 - Each worktree owns **only** `theme/patterns/section-<n>.php`.
-- Builders read `references/section-mapping.md` to pick the block template matching their interaction model, fill placeholders from their spec, and emit the pattern file.
+- Builders read **both** `design.md` and `references/section-mapping.md` to pick the block template matching their interaction model, fill placeholders from their spec + the design brief's Component Stylings section, and emit the pattern file. Every builder agent prompt must include: "Your pattern must follow `design.md`. When choosing backgrounds, radii, button colors, shadows, or typography, cite the specific subsection of `design.md` driving the choice. Do not introduce values that aren't documented there."
 - Orchestrator merges worktrees sequentially onto main, running the build gate (see step 2) after each merge.
 
 If fewer than 3 sections exist, or the user explicitly asks, run builders sequentially without worktrees. The checklist, template selection, and build gate still apply.
@@ -133,7 +153,8 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 
 - `scripts/extract.js` — full-page capture extractor. Semantic-landmark preflight (`<section>`, `<header>`, `<footer>`, `<nav>`, `<main>`, `<article>`, `[role="region"]` filtered to visible + height ≥ 200 px); falls through to Y-band clustering only when fewer than 3 semantic landmarks are found. Largest-visible-text display sampler, framework-default button blacklist, CORS-tainted palette fallback. Pass the body as the `function` argument to `evaluate_script`.
 - `scripts/extract-section.js` — per-section deep extractor. Walks a 40-property `getComputedStyle()` tree rooted at the section wrapper.
-- `references/capture.md` — capture procedure, asset download loop, per-section extraction loop.
+- `references/capture.md` — capture procedure, asset download loop, per-section extraction loop, font self-host download.
+- `references/design-brief.md` — the `design.md` template and filling rules for step 1b (9-section design system contract).
 - `references/spec-files.md` — spec file template and how to fill it.
 - `references/section-mapping.md` — block-markup templates per interaction model, with placeholder variables.
 - `references/theme-tokens.md` — `analysis.tokens` → `theme.json`, brightness-based `core/cover` vs `core/group` rule, commercial-to-free font substitution table.
