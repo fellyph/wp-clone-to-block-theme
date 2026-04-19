@@ -1,5 +1,8 @@
 # Extracting theme.json tokens from captured styles
 
+> **Since step 1b of `SKILL.md`, the clone root's `design.md` is the authoritative source for palette roles, font families, shadow stacks, and radius scale.** This file explains *how* to derive each value; `design.md` is *what* was derived. When emitting `theme.json`, copy values from `design.md` and use this file only to resolve format questions — e.g. how to express the captured spacing scale in `settings.spacing.spacingSizes`, or how `@font-face` URLs map into `settings.typography.fontFamilies`. If the two ever disagree, `design.md` wins and this file is the bug.
+
+
 Translate the `tokens` and `palette` objects in `analysis.json` into a `theme.json` for the generated block theme. Aim for a clean, minimal token set — do not port every computed value verbatim.
 
 ## Colors
@@ -32,11 +35,29 @@ Cap the palette at 6 named colors. Always include `base` and `contrast` so WP's 
 
 **Never use a page-builder default color as `primary` unless the original site is genuinely branded in that color.** The extractor already blacklists the known defaults; honor its signal. If you find yourself tempted to override `tokens.defaultButtonSkipped: true` and use the skipped color, first verify against the desktop screenshot that the color actually appears as a brand accent and not just as an unstyled button.
 
+### Page-wide background gradient
+
+If `tokens.pageBackground` is non-null, emit it into `theme.json` `styles.background.gradient` so every section inherits it from `<body>`:
+
+```json
+"styles": {
+  "background": { "gradient": "<tokens.pageBackground.gradient verbatim>" },
+  "color": { "text": "var(--wp--preset--color--contrast)" },
+  ...
+}
+```
+
+With this set, the pattern generator MUST omit `backgroundColor` / `style.background` on any section whose `effectiveBg.source === 'pageBackground'` — painting it twice produces visible stripes as each `core/group` restarts the gradient. Sections with a locally-scoped gradient (`source: 'wrapper' | 'ancestor' | 'sibling'`) still emit inline per `section-mapping.md` gradient rule.
+
+### Gradient color stops
+
+If any `sections[].effectiveBg.image` is a gradient, parse its first two color stops with a simple regex (`#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)`) and check each against the palette above. If one of the stops is within ~20 LAB units of `primary` or `secondary`, no change — the gradient will read as a brand tint. If neither stop matches, add the two stops as additional palette entries (`accent-start`, `accent-end`) so later edits in the Site Editor surface them as pickable colors. Don't try to auto-register gradient **presets** in `theme.json` for this iteration — inline `style.background` on each `core/group` (per `section-mapping.md`) is enough.
+
 ## Typography
 
 `tokens.display.fontFamily` is the source of truth — it's the largest visible text on the page, not whatever `<h1>` happens to be in the DOM. `tokens.body.fontFamily` is sampled from a paragraph-sized text element, not from `getComputedStyle(body)` (which often returns a browser default like `Arial, Helvetica, sans-serif` and is useless).
 
-Many builder sites use commercial fonts via their own CDNs. You cannot ship those. Match the captured family against this commercial-to-free substitution table:
+Many builder sites use commercial fonts via their own CDNs. You cannot ship those. Match the captured family against this commercial-to-free substitution table, then self-host the free replacement per `references/capture.md` step 4a — **do not** emit `@import url('https://fonts.googleapis.com/...')` in `theme/style.css`. Google Fonts' CDN blocks offline rendering, causes a flash of unstyled text on first paint, and leaks visitor IPs to a third party. The capture step already downloaded the WOFF2 files; the foundation step wires them up with local `@font-face` rules.
 
 | Captured family substring (case-insensitive) | Free replacement |
 | --- | --- |

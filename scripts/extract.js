@@ -157,9 +157,130 @@
     deduped.push(w);
   }
 
+  // ---- Page-background detection ----
+  // Builder templates sometimes paint one long gradient behind every section
+  // (e.g. a full-height dark-to-bright body fade). If we attach that gradient
+  // to each section pattern, WP rerenders it per-pattern and produces visible
+  // stripes. Recover it once as a page-level token so pattern emission can
+  // skip section bg and the theme.json `styles.background.gradient` inherits
+  // it onto <body>.
+  const pageBackground = (() => {
+    const pageH = document.body.scrollHeight;
+    const candidates = Array.from(document.body.querySelectorAll('*')).filter((el) => {
+      if (!isVisible(el)) return false;
+      const cs = getComputedStyle(el);
+      if (!cs.backgroundImage || cs.backgroundImage === 'none') return false;
+      if (!/gradient\(/.test(cs.backgroundImage)) return false;
+      const r = el.getBoundingClientRect();
+      return r.height >= pageH * 0.8 && r.width >= window.innerWidth * 0.6;
+    });
+    if (candidates.length === 0) return null;
+    // Prefer the largest-area candidate (covers the most visual real estate)
+    candidates.sort((a, b) => {
+      const ra = a.getBoundingClientRect();
+      const rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    const winner = candidates[0];
+    const wcs = getComputedStyle(winner);
+    return {
+      gradient: wcs.backgroundImage.slice(0, 400),
+      color: wcs.backgroundColor && wcs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? wcs.backgroundColor : null,
+    };
+  })();
+
+  // ---- Effective-background walker ----
+  // The "tightest wrapper" section element often has a transparent background
+  // because page builders layer gradients and images on absolutely-positioned
+  // sibling or ancestor "background" divs. To recover the *effective* bg a
+  // user actually sees behind the section, walk up the ancestor chain and
+  // scan in-band siblings, preferring gradients > image URLs > solid colors.
+  const isGradient = (v) => typeof v === 'string' && /gradient\(/.test(v);
+  const isTransparentColor = (v) => !v || v === 'rgba(0, 0, 0, 0)' || v === 'transparent';
+  const pickEffectiveBg = (el, sectionTop, sectionBottom) => {
+    const out = { color: null, image: null, source: null };
+    // 1. the wrapper itself
+    const ownCs = getComputedStyle(el);
+    if (!isTransparentColor(ownCs.backgroundColor)) {
+      out.color = ownCs.backgroundColor;
+      out.source = 'wrapper';
+    }
+    if (ownCs.backgroundImage && ownCs.backgroundImage !== 'none') {
+      out.image = ownCs.backgroundImage.slice(0, 400);
+      out.source = 'wrapper';
+    }
+    // 2. walk up to 4 ancestors — halt at body
+    let p = el.parentElement;
+    let depth = 0;
+    while (p && p !== document.body && depth < 4) {
+      const pcs = getComputedStyle(p);
+      if (!out.image && pcs.backgroundImage && pcs.backgroundImage !== 'none') {
+        out.image = pcs.backgroundImage.slice(0, 400);
+        out.source = 'ancestor';
+      }
+      if (!out.color && !isTransparentColor(pcs.backgroundColor)) {
+        out.color = pcs.backgroundColor;
+        if (!out.source) out.source = 'ancestor';
+      }
+      if (out.image && isGradient(out.image)) break; // gradient found, done
+      p = p.parentElement;
+      depth++;
+    }
+    // 3. in-band sibling/overlap scan — look for absolute-positioned bg layers
+    if (!out.image || !isGradient(out.image)) {
+      const sectionH = sectionBottom - sectionTop;
+      const candidates = Array.from(document.body.querySelectorAll('*')).filter((c) => {
+        if (c === el || el.contains(c) || c.contains(el)) return false;
+        if (!isVisible(c)) return false;
+        const cr = c.getBoundingClientRect();
+        const cTop = cr.top + window.scrollY;
+        const cBot = cTop + cr.height;
+        const overlap = Math.max(0, Math.min(cBot, sectionBottom) - Math.max(cTop, sectionTop));
+        return overlap >= sectionH * 0.8 && cr.width >= 600;
+      });
+      for (const c of candidates) {
+        const ccs = getComputedStyle(c);
+        if (ccs.backgroundImage && ccs.backgroundImage !== 'none' && isGradient(ccs.backgroundImage)) {
+          out.image = ccs.backgroundImage.slice(0, 400);
+          out.source = 'sibling';
+          break;
+        }
+      }
+    }
+    return (out.color || out.image) ? out : null;
+  };
+
+  // ---- Divider detection ----
+  // Thin horizontal rules — <hr>, or <div>/<span> with height 1-4px and width
+  // ≥ 60% of the viewport and a non-transparent visible color. These delimit
+  // sections on many portfolio/editorial sites.
+  const dividers = Array.from(document.body.querySelectorAll('*')).reduce((acc, el) => {
+    if (!isVisible(el)) return acc;
+    const r = el.getBoundingClientRect();
+    if (r.height < 1 || r.height > 4) return acc;
+    if (r.width < window.innerWidth * 0.6) return acc;
+    // Reject if it sits inside a text block (divider-like glyph, not a section rule)
+    const parent = el.parentElement;
+    if (parent && (parent.textContent || '').trim().length > 50) return acc;
+    const cs = getComputedStyle(el);
+    let color = null;
+    if (!isTransparentColor(cs.backgroundColor)) color = cs.backgroundColor;
+    else if (!isTransparentColor(cs.borderTopColor) && parseFloat(cs.borderTopWidth) >= 1) color = cs.borderTopColor;
+    if (!color) return acc;
+    acc.push({
+      top: Math.round(r.top + window.scrollY),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+      color,
+    });
+    return acc;
+  }, []);
+
   const sections = deduped.slice(0, 20).map(({ el }, i) => {
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
+    const sectionTop = Math.round(r.top + window.scrollY);
+    const sectionBottom = sectionTop + Math.round(r.height);
     const biggestText = Array.from(el.querySelectorAll('h1,h2,h3,[role="heading"]'))
       .filter(isVisible)
       .map((e) => ({ e, size: parseFloat(getComputedStyle(e).fontSize) || 0 }))
@@ -173,18 +294,50 @@
         .sort((a, b) => b.size - a.size)[0];
       headingText = inner?.e.textContent?.trim().slice(0, 100) || null;
     }
+    const effectiveBg = pickEffectiveBg(el, sectionTop, sectionBottom);
+    // Bracketing dividers: any divider within 40px above the top or below the bottom
+    const dividerAbove = dividers.find((d) => Math.abs(d.top - sectionTop) <= 40 && d.top <= sectionTop + 10) || null;
+    const dividerBelow = dividers.find((d) => Math.abs(d.top - sectionBottom) <= 40 && d.top >= sectionBottom - 40) || null;
     return {
       index: i,
       tag: el.tagName.toLowerCase(),
-      top: Math.round(r.top + window.scrollY),
+      top: sectionTop,
       height: Math.round(r.height),
       bg: cs.backgroundColor,
       bgImage: cs.backgroundImage !== 'none' ? cs.backgroundImage.slice(0, 200) : null,
+      effectiveBg,
+      dividerAbove,
+      dividerBelow,
       heading: headingText,
       imgCount: el.querySelectorAll('img').length,
       btnCount: el.querySelectorAll('a[role="button"], button').length,
     };
   });
+
+  // Gradient reassignment pass.
+  // 1. If a section's effectiveBg matches the page-level gradient, clear it —
+  //    the body will inherit via theme.json, and painting it again per-pattern
+  //    would stripe. Record the match via source='pageBackground' so callers
+  //    can still tell this section had a gradient originally.
+  // 2. If two adjacent sections share the same (non-page) gradient, keep it
+  //    on the topmost and inherit to prevent stripes within a local group.
+  const pageGradient = pageBackground?.gradient || null;
+  for (const s of sections) {
+    if (pageGradient && s.effectiveBg && s.effectiveBg.image === pageGradient) {
+      s.effectiveBg = { color: s.effectiveBg.color, image: null, source: 'pageBackground' };
+    }
+  }
+  for (let i = 1; i < sections.length; i++) {
+    const prev = sections[i - 1].effectiveBg;
+    const curr = sections[i].effectiveBg;
+    if (prev && curr && prev.image && curr.image && prev.image === curr.image) {
+      sections[i].effectiveBg = {
+        color: curr.color,
+        image: null,
+        source: 'inherited',
+      };
+    }
+  }
 
   // ---- Hero-image palette sampler ----
   // Pick the largest visible <img>, draw it into a 40×40 canvas, quantize
@@ -268,11 +421,13 @@
     defaultButtonSkipped,
     h1Swapped,
     legacyH1Size,
+    pageBackground,
   };
 
   return {
     tokens,
     sections,
+    dividers,
     palette,
     nav,
     images,

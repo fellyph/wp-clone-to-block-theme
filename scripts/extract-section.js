@@ -194,6 +194,71 @@
   const wrapperStyles = extractStyles(tightest);
   const wrapperRect = tightest.getBoundingClientRect();
 
+  // Effective background: the tightest wrapper is often transparent and the
+  // gradient/image lives on an ancestor or an absolutely-positioned sibling
+  // that spans the same Y band. Recover what a human actually sees.
+  const isGradient = (v) => typeof v === 'string' && /gradient\(/.test(v);
+  const isTransparentColor = (v) => !v || v === 'rgba(0, 0, 0, 0)' || v === 'transparent';
+  const effectiveBg = (() => {
+    const out = { color: null, image: null, source: null };
+    const ownCs = getComputedStyle(tightest);
+    if (!isTransparentColor(ownCs.backgroundColor)) { out.color = ownCs.backgroundColor; out.source = 'wrapper'; }
+    if (ownCs.backgroundImage && ownCs.backgroundImage !== 'none') { out.image = ownCs.backgroundImage.slice(0, 400); out.source = 'wrapper'; }
+    let p = tightest.parentElement;
+    let depth = 0;
+    while (p && p !== document.body && depth < 4) {
+      const pcs = getComputedStyle(p);
+      if (!out.image && pcs.backgroundImage && pcs.backgroundImage !== 'none') { out.image = pcs.backgroundImage.slice(0, 400); out.source = 'ancestor'; }
+      if (!out.color && !isTransparentColor(pcs.backgroundColor)) { out.color = pcs.backgroundColor; if (!out.source) out.source = 'ancestor'; }
+      if (out.image && isGradient(out.image)) break;
+      p = p.parentElement;
+      depth++;
+    }
+    if (!out.image || !isGradient(out.image)) {
+      const sectionH = bottom - top;
+      const candidates = Array.from(document.body.querySelectorAll('*')).filter((c) => {
+        if (c === tightest || tightest.contains(c) || c.contains(tightest)) return false;
+        if (!isVisible(c)) return false;
+        const cr = c.getBoundingClientRect();
+        const cTop = cr.top + window.scrollY;
+        const cBot = cTop + cr.height;
+        const overlap = Math.max(0, Math.min(cBot, bottom) - Math.max(cTop, top));
+        return overlap >= sectionH * 0.8 && cr.width >= 600;
+      });
+      for (const c of candidates) {
+        const ccs = getComputedStyle(c);
+        if (ccs.backgroundImage && ccs.backgroundImage !== 'none' && isGradient(ccs.backgroundImage)) {
+          out.image = ccs.backgroundImage.slice(0, 400);
+          out.source = 'sibling';
+          break;
+        }
+      }
+    }
+    return (out.color || out.image) ? out : null;
+  })();
+
+  // Dividers bracketing this section — same heuristic as extract.js, scoped
+  // to elements within 40 px of the section's top or bottom edge.
+  const dividers = Array.from(document.body.querySelectorAll('*')).reduce((acc, el) => {
+    if (!isVisible(el)) return acc;
+    const r = el.getBoundingClientRect();
+    if (r.height < 1 || r.height > 4) return acc;
+    if (r.width < window.innerWidth * 0.6) return acc;
+    const parent = el.parentElement;
+    if (parent && (parent.textContent || '').trim().length > 50) return acc;
+    const elTop = r.top + window.scrollY;
+    if (!(Math.abs(elTop - top) <= 40 || Math.abs(elTop - bottom) <= 40)) return acc;
+    const cs = getComputedStyle(el);
+    let color = null;
+    if (!isTransparentColor(cs.backgroundColor)) color = cs.backgroundColor;
+    else if (!isTransparentColor(cs.borderTopColor) && parseFloat(cs.borderTopWidth) >= 1) color = cs.borderTopColor;
+    if (!color) return acc;
+    acc.push({ top: Math.round(elTop), width: Math.round(r.width), height: Math.round(r.height), color });
+    return acc;
+  }, []);
+  const dividerAbove = dividers.find((d) => d.top <= top + 5) || null;
+  const dividerBelow = dividers.find((d) => d.top >= bottom - 5) || null;
+
   return {
     band: { top, height, bottom },
     wrapper: {
@@ -205,6 +270,9 @@
       },
       styles: wrapperStyles,
     },
+    effectiveBg,
+    dividerAbove,
+    dividerBelow,
     tree,
     flat: {
       text: flatText.slice(0, 30),

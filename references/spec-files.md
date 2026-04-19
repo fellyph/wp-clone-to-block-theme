@@ -16,7 +16,7 @@ Copy this template verbatim for every section. Fill every field. If a field trul
 ## Identity
 
 - **Index in page:** <n from analysis.json.sections>
-- **Interaction model:** <static | cover-with-headline | media-text | columns | gallery | logo-strip | testimonial | cta | color-block-grid | footer | nav>
+- **Interaction model:** <static | cover-with-headline | media-text | columns | gallery | logo-strip | testimonial | cta | blog-card-grid | price-list | color-block-grid | footer | nav>
 - **Y band:** top=<px>, height=<px>
 - **Framework-specific widget:** <none | marquee | store | booking | form | chat | members | cms-collection | shopify-embed>
 - **Copyright flag:** <none | contains trademarked logos | contains celebrity photography | contains copyrighted editorial imagery>
@@ -63,6 +63,8 @@ If this section has **layered images** (background + foreground stacked), list t
 - **Child layout:** <grid | flex-row | flex-column | stack>
 - **Column count (if grid/flex-row):** <N>
 - **Gap between children:** <Npx>
+- **Divider above:** <color + thickness (e.g. "rgba(255,255,255,0.15) 1px"), or n/a>
+- **Divider below:** <color + thickness, or n/a>
 - **Responsive notes:** <how does this change at 390px from the mobile screenshot?>
 
 ## Generation instructions
@@ -70,6 +72,7 @@ If this section has **layered images** (background + foreground stacked), list t
 - **Block template to use (from `section-mapping.md`):** `<template-name>`
 - **Placeholders to fill:**
   - `{{BG_COLOR}}` → <hex>
+  - `{{BG_GRADIENT}}` → <linear-gradient(...) string, or n/a — wins over BG_COLOR when present>
   - `{{TEXT_COLOR}}` → <hex>
   - `{{HEADING}}` → "<text from above>"
   - `{{SUBHEADING}}` → "<text>"
@@ -77,7 +80,10 @@ If this section has **layered images** (background + foreground stacked), list t
   - `{{BUTTON_HREF}}` → "<url>"
   - `{{ASSETS}}` → [`assets/img-<nn>.<ext>`, ...] (as a Bash array for the generator loop)
   - `{{COLUMN_COUNT}}` → <N>
+  - `{{DIVIDER_ABOVE}}` → <color hex, or n/a>
+  - `{{DIVIDER_BELOW}}` → <color hex, or n/a>
 - **Substitutions made for copyright:** <none | img-04.jpg replaced with assets/placeholder-600x400.svg because it's a celebrity photo>
+- **Design brief citations:** <list the `design.md` subsections this pattern depends on, e.g. "Component > Cards & Containers for shadow and radius; Typography > Card Heading for title size/weight; Color Palette > Surface & Shadows for card bg"> — the builder in step 5 reads both files and expects these citations.
 
 ## Notes for the pattern generator
 
