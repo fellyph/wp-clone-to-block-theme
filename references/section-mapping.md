@@ -15,6 +15,80 @@ brightness = (0.299 * R + 0.587 * G + 0.114 * B)
 - If brightness **≥ 200** (light/near-white base): **do not use `core/cover` as the top-level container.** The cover block forces inner text to white on an overlay, which produces invisible headings on light backgrounds. Use `core/group` with explicit `textColor="contrast"` instead. All templates below marked "⚠ cover-variant" have a paired "light-variant" — pick the right one.
 - If brightness **< 200** (dark base): `core/cover` is fine and the cover's default white text reads correctly.
 
+## The gradient rule
+
+**Skip entirely when the spec marks the gradient source as `pageBackground` or `inherited`.** In that case the `<body>` (or a preceding section) already paints the gradient and re-emitting it per-pattern produces visible stripes. Leave the outer `core/group` with no `backgroundColor` and no `style.background`.
+
+If the spec's **Background gradient** field is set AND `effectiveBg.source` is `wrapper` / `ancestor` / `sibling` (i.e. a locally-scoped gradient, not a page-level one), emit the outer `core/group` with `style.background.gradient` set to the captured string verbatim and **omit** `backgroundColor` / the `backgroundColor` slug. Gradients win over flat colors.
+
+Compute brightness against the *dominant stop* (largest-area color) to pick the text color, not against `{{BG_COLOR}}`. For a simple two-stop gradient, pick the stop closer to where headlines sit in the layout — first stop for top-heavy sections, last stop for bottom-heavy.
+
+Example `core/group` opening tag with a gradient:
+
+```html
+<!-- wp:group {"align":"full","style":{"background":{"gradient":"{{BG_GRADIENT}}"},"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80"}}},"textColor":"contrast","layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull has-contrast-color has-text-color" style="background:{{BG_GRADIENT}}">
+  <!-- ...inner blocks... -->
+</div>
+<!-- /wp:group -->
+```
+
+When `{{BG_GRADIENT}}` is `n/a`, fall back to `backgroundColor:{{BG_COLOR_SLUG}}` as every template currently does.
+
+## The divider rule
+
+If the spec's **Divider above** field is set, emit this block **before** the pattern's `core/group` opens. If **Divider below** is set, emit it **after** the group closes. Do NOT emit a divider for a section without a captured divider — false-positive rules between sections look worse than missing ones.
+
+```html
+<!-- wp:separator {"align":"full","style":{"color":{"background":"{{DIVIDER_COLOR}}"},"spacing":{"margin":{"top":"0","bottom":"0"}}},"className":"is-style-wide"} -->
+<hr class="wp-block-separator alignfull has-text-color has-background is-style-wide" style="background-color:{{DIVIDER_COLOR}};color:{{DIVIDER_COLOR}};margin-top:0;margin-bottom:0" />
+<!-- /wp:separator -->
+```
+
+`{{DIVIDER_COLOR}}` is the `color` field from `sections[i].dividerAbove` / `dividerBelow` (e.g. `rgba(255,255,255,0.15)`). Keep the margin zero so the rule sits flush against the section it brackets.
+
+## The styling rule — block attributes win over theme CSS
+
+**When a pattern needs a layout, padding, background color, gap, or button color that differs from the theme default, emit it as a block attribute — not as a `className` + CSS rule in `theme/style.css`.**
+
+WP's block-library CSS (`.wp-block-group.is-layout-flex`, `.wp-element-button`, `.wp-block-buttons`, …) is loaded on the front end after the theme's stylesheet and carries at least equal specificity to `.your-custom-class`. A rule like `.service-row { display: flex; padding: 1.5rem 2rem; }` in `style.css` will silently lose to `.wp-block-group.is-layout-flow { ... }` and the pattern renders wrong.
+
+Prefer (inline attributes):
+
+```html
+<!-- wp:group {"className":"service-row","backgroundColor":"primary","style":{"spacing":{"padding":{"top":"1.5rem","right":"2rem","bottom":"1.5rem","left":"2rem"}}},"layout":{"type":"flex","flexWrap":"wrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
+<div class="wp-block-group service-row has-primary-background-color has-background" style="padding:1.5rem 2rem">…</div>
+<!-- /wp:group -->
+```
+
+Avoid (CSS class + external rule):
+
+```html
+<!-- wp:group {"className":"service-row"} -->
+<div class="wp-block-group service-row">…</div>
+<!-- /wp:group -->
+```
+```css
+/* style.css — silently loses to WP's .wp-block-group.is-layout-flex */
+.service-row { display: flex; padding: 1.5rem 2rem; background: #0038ff; }
+```
+
+**Pattern cites design.md, not raw captures.** Every template fills `{{...}}` placeholders from two sources: the per-section spec file (content, local image paths, gradient/divider flags) **and** the clone-root `design.md` (palette slugs, radius scale, shadow stack, typography sizes, button styling). If a spec says `Background gradient: n/a` but `design.md`'s Color Palette & Roles table shows the section sits on a page-wide body gradient, respect the design brief — don't re-paint the gradient per pattern. When the two sources disagree, pause and reconcile before emitting; visual QA will catch it otherwise.
+
+**What `theme/style.css` is still good for:**
+- `@font-face` and `@import` font rules
+- Element-level tweaks on the unlayered host (`body`, `a:hover` color, smooth scroll)
+- Utility classes that are purely visual (not structural) and that tolerate being overridden — e.g. opacity bylines.
+
+**What it is NOT good for:**
+- Flex/grid layouts on blocks — use `"layout":{"type":"flex"/"grid"}` in block attributes.
+- Padding, margin, gap — use `"style":{"spacing":...}`.
+- Background color/gradient — use `"backgroundColor":"<slug>"` or `"style":{"background":...}`.
+- Button colors — use `"backgroundColor"` / `"textColor"` on the `core/button`, not CSS descendant selectors.
+- Block-specific typography — use `"fontSize":"<slug>"` and `"style":{"typography":...}` on the heading/paragraph block.
+
+If a future Site Editor user changes a block's styling, inline attributes persist through serialization; CSS-class rules get orphaned.
+
 ## Template catalog
 
 Each template below takes placeholder variables and emits valid WP block markup. After filling placeholders, wrap the result in the pattern file header:
@@ -258,6 +332,94 @@ A single centered call-to-action block — headline + button, no images.
 </div>
 <!-- /wp:group -->
 ```
+
+---
+
+### `blog-card-grid`
+
+A row of N post cards, each with a featured image, a byline/date, and a linked title. Use this instead of generic `columns` whenever the spec's interaction model is a blog/insights/news listing — the byline order and the linked-title wrapping differ from a plain columns template.
+
+**Classification heuristic (step 3):** 3 or more adjacent columns, each containing one `<img>`, one small-font paragraph (< 14 px, often containing "By" or a date), and one larger-font heading/link.
+
+**Placeholders:** `{{HEADING}}` (section headline), `{{CARDS}}` (array of `{ image_path, image_alt, byline, title, href }`).
+
+**Byline ordering:** always *below* the image and *above* the title. Even if the source captured the byline at an unusual position, normalize to this order — it's what every WP theme does for post cards and it reads correctly.
+
+```html
+<!-- wp:group {"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"},"blockGap":"var:preset|spacing|70"}},"textColor":"contrast","layout":{"type":"constrained","wideSize":"1280px"}} -->
+<div class="wp-block-group alignfull has-contrast-color has-text-color" style="padding-top:var(--wp--preset--spacing--80);padding-right:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--80);padding-left:var(--wp--preset--spacing--70)">
+<!-- wp:heading {"level":2,"fontSize":"xx-large"} -->
+<h2 class="wp-block-heading has-xx-large-font-size">{{HEADING}}</h2>
+<!-- /wp:heading -->
+<!-- wp:columns {"align":"wide"} -->
+<div class="wp-block-columns alignwide">
+<!-- FOREACH card in {{CARDS}}: -->
+<!-- wp:column {"className":"insight-card"} -->
+<div class="wp-block-column insight-card">
+<!-- wp:image {"sizeSlug":"large","linkDestination":"none","style":{"border":{"radius":"4px"}}} -->
+<figure class="wp-block-image size-large has-custom-border"><img src="<?php echo esc_url( get_theme_file_uri('{{card.image_path}}') ); ?>" alt="{{card.image_alt}}" style="border-radius:4px" /></figure>
+<!-- /wp:image -->
+<!-- wp:paragraph {"fontSize":"small","style":{"typography":{"fontStyle":"normal","fontWeight":"400"}},"className":"byline"} -->
+<p class="byline has-small-font-size" style="opacity:0.75">{{card.byline}}</p>
+<!-- /wp:paragraph -->
+<!-- wp:heading {"level":3,"fontSize":"large"} -->
+<h3 class="wp-block-heading has-large-font-size"><a href="{{card.href}}">{{card.title}}</a></h3>
+<!-- /wp:heading -->
+</div>
+<!-- /wp:column -->
+<!-- END FOREACH -->
+</div>
+<!-- /wp:columns -->
+</div>
+<!-- /wp:group -->
+```
+
+The `opacity:0.75` on the byline reads as a muted color on any gradient or flat background; avoid shipping a hardcoded `rgba` that will clash with a Site Editor palette swap.
+
+---
+
+### `price-list`
+
+A stack of N horizontal rows, each with a title (left), optional price or meta (center), and a CTA button (right). The row has a solid, typically-branded background color, and the whole stack has spacing between rows. Use this instead of `columns` for services / packages / pricing tiers where each row is a single offer.
+
+**Classification heuristic (step 3):** 2+ horizontally-laid-out groups at the same depth, each containing exactly one heading/title + one CTA button. Extra markers: a currency symbol (`$`, `€`, `£`, `¥`) or a short money-shaped string in each group.
+
+**Placeholders:** `{{HEADING}}` (section headline), `{{ROWS}}` (array of `{ title, price, cta_label, cta_href }`), `{{ROW_BG_SLUG}}` (row background color — usually `primary`), `{{ROW_PAD}}` (padding shorthand, default `1.5rem 2rem`), `{{CTA_BG_SLUG}}` (button bg, usually `base`/`contrast`), `{{CTA_FG_SLUG}}` (button text, usually the complement).
+
+**Rendering guarantees:** emit the row-level `core/group` with `"layout":{"type":"flex","flexWrap":"wrap","justifyContent":"space-between","verticalAlignment":"center"}` — this is the specificity-safe way to get a horizontal row on top of WP's block-library CSS. Use inline `style.spacing.padding` for the row's internal padding. Button colors go on the `core/button` as `backgroundColor`/`textColor` attributes, never as descendant CSS.
+
+```html
+<!-- wp:group {"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"},"blockGap":"var:preset|spacing|50"}},"textColor":"contrast","layout":{"type":"constrained","wideSize":"1280px"}} -->
+<div class="wp-block-group alignfull has-contrast-color has-text-color" style="padding-top:var(--wp--preset--spacing--80);padding-right:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--80);padding-left:var(--wp--preset--spacing--70)">
+<!-- wp:heading {"level":2,"fontSize":"xx-large"} -->
+<h2 class="wp-block-heading has-xx-large-font-size">{{HEADING}}</h2>
+<!-- /wp:heading -->
+<!-- FOREACH row in {{ROWS}}: -->
+<!-- wp:group {"align":"wide","className":"price-row","backgroundColor":"{{ROW_BG_SLUG}}","style":{"spacing":{"padding":{"top":"1.5rem","right":"2rem","bottom":"1.5rem","left":"2rem"}}},"layout":{"type":"flex","flexWrap":"wrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
+<div class="wp-block-group alignwide price-row has-{{ROW_BG_SLUG}}-background-color has-background" style="padding:{{ROW_PAD}}">
+<!-- wp:paragraph {"fontSize":"x-large","style":{"typography":{"fontWeight":"500"}}} -->
+<p class="has-x-large-font-size" style="font-weight:500">{{row.title}}</p>
+<!-- /wp:paragraph -->
+<!-- IF {{row.price}}: -->
+<!-- wp:paragraph {"fontSize":"medium"} -->
+<p class="has-medium-font-size" style="opacity:0.9">{{row.price}}</p>
+<!-- /wp:paragraph -->
+<!-- END IF -->
+<!-- wp:buttons -->
+<div class="wp-block-buttons">
+<!-- wp:button {"backgroundColor":"{{CTA_BG_SLUG}}","textColor":"{{CTA_FG_SLUG}}","style":{"border":{"radius":"999px"}}} -->
+<div class="wp-block-button"><a class="wp-block-button__link has-{{CTA_FG_SLUG}}-color has-{{CTA_BG_SLUG}}-background-color has-text-color has-background wp-element-button" href="{{row.cta_href}}" style="border-radius:999px">{{row.cta_label}}</a></div>
+<!-- /wp:button -->
+</div>
+<!-- /wp:buttons -->
+</div>
+<!-- /wp:group -->
+<!-- END FOREACH -->
+</div>
+<!-- /wp:group -->
+```
+
+If the spec lists more than ~5 rows, consider paginating into a `core/columns` (2 per row) instead — a long vertical stack of full-width price rows reads as a list, not a grid.
 
 ---
 
