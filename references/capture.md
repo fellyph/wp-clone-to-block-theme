@@ -60,7 +60,20 @@ The returned JSON has this shape:
     "h1Swapped": false,             // true means the visible headline is larger than <h1> — act accordingly
     "legacyH1Size": 17              // the size querySelector('h1') would have returned
   },
-  "sections": [ { "index": 0, "top": 0, "height": 900, "heading": "...", "imgCount": 2, ... } ],
+  "sections": [ {
+    "index": 0, "top": 0, "height": 900,
+    "bg": "rgba(0, 0, 0, 0)",             // computed backgroundColor of the tightest wrapper
+    "bgImage": null,                       // computed backgroundImage of the tightest wrapper
+    "effectiveBg": {                       // actual bg a user sees — may come from ancestor or sibling bg layer
+      "color": "rgba(0, 0, 0, 0)",
+      "image": "linear-gradient(180deg, #1a1f4c 0%, #0038ff 100%)",
+      "source": "ancestor"                // "wrapper" | "ancestor" | "sibling"
+    },
+    "dividerAbove": null,                  // { top, width, height, color } if a thin horizontal rule sits within 40px of the section top
+    "dividerBelow": { "top": 943, "width": 1185, "height": 1, "color": "rgba(255,255,255,0.15)" },
+    "heading": "...", "imgCount": 2
+  } ],
+  "dividers": [ { "top": 943, "width": 1185, "height": 1, "color": "rgba(255,255,255,0.15)" } ],
   "palette":  [ { "hex": "#rrggbb", "count": 123 } ],   // from hero-image histogram
   "nav":      [ "Home", "About", ... ],
   "images":   [ { "src": "...", "alt": "...", "w": 1600, "h": 900 } ],
@@ -83,6 +96,10 @@ Save the result as `.capture/<slug>/analysis.json`.
 - **`tokens.h1Swapped: true`** means the site author used `<h1>` as a small eyebrow/kicker and put the real headline in a larger element. When true, use `tokens.display` for the `xx-large` preset and `legacyH1Size` for `large`.
 - **`diagnostics.sectionStrategy`** tells you which detection path ran. `'semantic'` means `<section>/<header>/<footer>/...` were good enough; `'y-band'` means the page has no usable semantic landmarks and the geometric fallback was used. Both are fine; the field exists so you can record which strategy the site demanded.
 - **`sections`** is already deduped (desktop+mobile DOM variants are collapsed by the ±40px Y-band rule). Expect 5–12 on a well-structured site.
+- **`tokens.pageBackground`** is set when a single gradient element covers ≥80% of `pageHeight` and ≥60% of viewport width — this is the "one long gradient behind the whole page" pattern that builder templates paint as a body background. When this field is non-null, write the gradient into `theme.json` `styles.background.gradient` so `<body>` inherits it, and **do not** re-emit it on any section pattern. Any section whose `effectiveBg.image` matched this gradient will already have `effectiveBg = { image: null, source: 'pageBackground' }` so the pattern generator can cleanly skip background emission.
+- **`sections[i].effectiveBg`** is the bg a user actually sees, recovered by walking up to 4 ancestors and scanning absolutely-positioned siblings whose Y band overlaps the section by ≥80%. Page builders (Wix, Webflow, Squarespace) routinely layer gradients on a separate background div while the semantic section wrapper stays transparent, so `bg` / `bgImage` alone will miss them. Prefer `effectiveBg.image` when emitting a pattern; fall back to `effectiveBg.color`, then `bg` / `bgImage`. Respect the `source` field: `'pageBackground'` and `'inherited'` both mean "the body or a preceding section owns this bg — do not emit".
+- **`sections[i].dividerAbove` / `dividerBelow`** are thin (1–4 px) horizontal rules that span ≥60% of the viewport and sit within 40 px of the section's top or bottom edge. Emit a `core/separator` block when they're present; don't invent one when absent.
+- **`dividers[]`** lists every candidate divider on the page. Useful for cross-referencing when a divider sits between two sections and you want to confirm attribution.
 - **`diagnostics.afterDedupe < 3`** is a failure signal — the page has no recoverable section structure. Fall back to the screenshot-only flow (see Known limitations).
 
 ## 4. Download every captured image (do NOT defer)
@@ -113,6 +130,57 @@ done
 After the loop, `ls $DIR | wc -l` should match `analysis.json.images | length`. If a download failed (CDN 403, geoblock, cache-bust), mark the manifest entry `failed: true` — step 3 will substitute a placeholder during spec writing.
 
 **Do not hotlink.** The generated theme must ship its own assets under `theme/assets/`. Never embed remote CDN URLs in the generated block markup — they expire, get cache-busted, or CORS-block cross-origin loads.
+
+## 4a. Download the display + body fonts (self-host instead of `@import`)
+
+The extractor returns `tokens.display.fontFamily` / `tokens.body.fontFamily`. Match those against the substitution table in `references/theme-tokens.md` to pick a Google Fonts target, then download the WOFF2 files during capture — *not* at `@import` time in the generated theme. Self-hosting means the theme renders identically offline and without a flash of unstyled text while Google Fonts loads.
+
+Save to `./clones/<slug>/.capture/fonts/<family>-<weight>.woff2` and write a `fonts/manifest.json` mapping each local file to its `{ family, weight, style, unicodeRange }`. Step 2 (foundation) copies this directory into `theme/assets/fonts/` and emits `@font-face` rules in `theme/style.css`.
+
+```bash
+SLUG="<slug>"
+FDIR="./clones/$SLUG/.capture/fonts"
+mkdir -p "$FDIR"
+
+# Build the Google Fonts CSS URL from the substitution targets chosen in theme-tokens.md.
+# Example: display=Syne (weights 600,700,800), body=Inter (weights 400,500,600,700)
+GF_URL="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+
+# Google Fonts serves different CSS based on User-Agent. The `Mozilla/5.0` UA below
+# returns WOFF2, which is what modern WP supports. Omit the UA and you'll get TTF.
+curl -sL -A 'Mozilla/5.0' "$GF_URL" -o "$FDIR/fonts.css"
+
+# Parse the @font-face rules: extract the src URL, family, weight, style, and the
+# `unicode-range` per subset. Download each WOFF2 under a deterministic filename.
+python3 - <<'PY'
+import re, json, os, subprocess
+css = open('$FDIR/fonts.css').read()
+blocks = re.findall(r'@font-face\s*\{[^}]+\}', css)
+manifest = []
+for i, b in enumerate(blocks, 1):
+    family = re.search(r"font-family:\s*'([^']+)'", b).group(1)
+    weight = re.search(r'font-weight:\s*(\d+)', b).group(1)
+    style  = re.search(r'font-style:\s*(\w+)', b).group(1)
+    url    = re.search(r'url\((https:[^)]+\.woff2)\)', b).group(1)
+    urange = re.search(r'unicode-range:\s*([^;]+);', b)
+    name = f'{family.lower().replace(" ", "-")}-{weight}-{style}-{i:02d}.woff2'
+    out  = os.path.join('$FDIR', name)
+    subprocess.run(['curl', '-sL', '-A', 'Mozilla/5.0', '-o', out, url], check=True)
+    manifest.append({'local': name, 'family': family, 'weight': int(weight), 'style': style, 'unicodeRange': urange.group(1).strip() if urange else None})
+json.dump(manifest, open('$FDIR/manifest.json', 'w'), indent=2)
+print(f'downloaded {len(manifest)} font files')
+PY
+```
+
+Step 2's foundation step then:
+
+1. Copies `.capture/fonts/*.woff2` → `theme/assets/fonts/*.woff2`.
+2. Writes one `@font-face` block per manifest entry into `theme/style.css`, pointing `src` at `url('./assets/fonts/<local>') format('woff2')`.
+3. Omits any `@import` from `fonts.googleapis.com` in the generated `style.css`.
+
+`theme.json`'s `settings.typography.fontFamilies` should reference the family name (e.g. `"Syne"`), letting WP wire the preset to the `@font-face`-loaded face.
+
+**When to skip the download:** if the Google Fonts CSS URL 429s (rate limit) or the network is offline, emit the existing `@import` fallback in `theme/style.css` and flag it in `theme/notes.md`. Next iteration can retry.
 
 ## 5. Per-section deep extraction (one call per section)
 
