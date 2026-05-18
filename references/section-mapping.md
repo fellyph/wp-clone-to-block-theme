@@ -79,6 +79,7 @@ Avoid (CSS class + external rule):
 - `@font-face` and `@import` font rules
 - Element-level tweaks on the unlayered host (`body`, `a:hover` color, smooth scroll)
 - Utility classes that are purely visual (not structural) and that tolerate being overridden — e.g. opacity bylines.
+- Theme-scoped motion classes from `references/animation-capture.md` (`.clone-reveal`, `.clone-marquee`, hover overlays), always with `prefers-reduced-motion` fallbacks.
 
 **What it is NOT good for:**
 - Flex/grid layouts on blocks — use `"layout":{"type":"flex"/"grid"}` in block attributes.
@@ -255,6 +256,138 @@ If images are clearly portrait-oriented (avg h > avg w), reduce by 1.
   <!-- /wp:gallery -->
 </div>
 <!-- /wp:group -->
+```
+
+---
+
+### `animated-cover`
+
+Same content model as `cover-with-headline`, but the spec's Motion profile requires a simple preserved entry reveal. Use this only for CSS-only opacity/transform reveals; complex pinned timelines remain `cover-with-headline` plus a notes entry.
+
+**Placeholders:** same as `cover-with-headline`, plus `{{REVEAL_DURATION_MS}}`, `{{REVEAL_DELAY_MS}}`, and `{{REVEAL_TRANSFORM}}`.
+
+Implementation: emit the normal cover/group variant, add class `clone-reveal` to the inner container, and add theme-scoped CSS:
+
+```css
+.clone-reveal { animation: clone-reveal {{REVEAL_DURATION_MS}}ms ease both; animation-delay: {{REVEAL_DELAY_MS}}ms; }
+@keyframes clone-reveal { from { opacity: 0; transform: {{REVEAL_TRANSFORM}}; } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .clone-reveal { animation: none; opacity: 1; transform: none; } }
+```
+
+---
+
+### `horizontal-showcase`
+
+A wide, horizontally-scanned showcase used by portfolio strips, laptop mockup rows, and dark agency case-study ribbons. Prefer this over `gallery` when the source emphasizes lateral movement or oversized cards.
+
+**Placeholders:** `{{HEADING}}`, `{{ITEMS}}` (array of `{ image_path, image_alt, title, body, href }`), `{{BG_COLOR_SLUG}}`, `{{TEXT_COLOR_SLUG}}`.
+
+```html
+<!-- wp:group {"align":"full","backgroundColor":"{{BG_COLOR_SLUG}}","textColor":"{{TEXT_COLOR_SLUG}}","className":"clone-horizontal-showcase","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull clone-horizontal-showcase has-{{BG_COLOR_SLUG}}-background-color has-{{TEXT_COLOR_SLUG}}-color has-background has-text-color">
+  <!-- IF {{HEADING}} -->
+  <!-- wp:heading {"level":2} --><h2 class="wp-block-heading">{{HEADING}}</h2><!-- /wp:heading -->
+  <!-- END IF -->
+  <!-- wp:group {"align":"wide","className":"clone-horizontal-showcase__track","layout":{"type":"flex","flexWrap":"nowrap"}} -->
+  <div class="wp-block-group alignwide clone-horizontal-showcase__track">
+    <!-- FOREACH item in {{ITEMS}}: -->
+    <!-- wp:group {"className":"clone-horizontal-showcase__item","layout":{"type":"constrained"}} -->
+    <div class="wp-block-group clone-horizontal-showcase__item">
+      <!-- wp:image {"sizeSlug":"large"} -->
+      <figure class="wp-block-image size-large"><img src="<?php echo esc_url( get_theme_file_uri('{{item.image_path}}') ); ?>" alt="{{item.image_alt}}" /></figure>
+      <!-- /wp:image -->
+      <!-- wp:heading {"level":3,"fontSize":"medium"} --><h3 class="wp-block-heading has-medium-font-size">{{item.title}}</h3><!-- /wp:heading -->
+      <!-- wp:paragraph {"fontSize":"small"} --><p class="has-small-font-size">{{item.body}}</p><!-- /wp:paragraph -->
+    </div>
+    <!-- /wp:group -->
+    <!-- END FOREACH -->
+  </div>
+  <!-- /wp:group -->
+</div>
+<!-- /wp:group -->
+```
+
+Add CSS for overflow-x scrolling on small screens. Do not hide off-screen cards on mobile.
+
+---
+
+### `project-card-grid`
+
+A portfolio/case-study grid where each card has an image, title, service/meta text, and optional CTA. Use this instead of generic `columns` for project listings, especially when the source uses hover overlays or full-card links.
+
+**Placeholders:** `{{HEADING}}`, `{{PROJECTS}}` (array of `{ image_path, image_alt, title, meta, href, cta }`), `{{COLUMNS}}`, `{{MOTION_CLASS}}` (`none` or `clone-hover-overlay`).
+
+```html
+<!-- wp:group {"align":"wide","className":"clone-project-grid {{MOTION_CLASS}}","style":{"spacing":{"padding":{"top":"var:preset|spacing|70","bottom":"var:preset|spacing|70"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignwide clone-project-grid {{MOTION_CLASS}}">
+  <!-- IF {{HEADING}} -->
+  <!-- wp:heading {"level":2} --><h2 class="wp-block-heading">{{HEADING}}</h2><!-- /wp:heading -->
+  <!-- END IF -->
+  <!-- wp:columns {"className":"clone-project-grid__columns"} -->
+  <div class="wp-block-columns clone-project-grid__columns">
+    <!-- FOREACH project in {{PROJECTS}}: -->
+    <!-- wp:column {"className":"clone-project-card"} -->
+    <div class="wp-block-column clone-project-card">
+      <!-- wp:image {"sizeSlug":"large","linkDestination":"custom"} -->
+      <figure class="wp-block-image size-large"><a href="{{project.href}}"><img src="<?php echo esc_url( get_theme_file_uri('{{project.image_path}}') ); ?>" alt="{{project.image_alt}}" /></a></figure>
+      <!-- /wp:image -->
+      <!-- wp:heading {"level":3,"fontSize":"medium"} --><h3 class="wp-block-heading has-medium-font-size"><a href="{{project.href}}">{{project.title}}</a></h3><!-- /wp:heading -->
+      <!-- wp:paragraph {"fontSize":"small"} --><p class="has-small-font-size">{{project.meta}}</p><!-- /wp:paragraph -->
+      <!-- IF {{project.cta}} -->
+      <!-- wp:paragraph {"fontSize":"small"} --><p class="has-small-font-size"><a href="{{project.href}}">{{project.cta}}</a></p><!-- /wp:paragraph -->
+      <!-- END IF -->
+    </div>
+    <!-- /wp:column -->
+    <!-- END FOREACH -->
+  </div>
+  <!-- /wp:columns -->
+</div>
+<!-- /wp:group -->
+```
+
+For hover-overlay sources, add CSS in `style.css` scoped to `.clone-project-grid.clone-hover-overlay`; mobile must show the title/meta without hover.
+
+For Wix/Studio portfolio grids where desktop and mobile expose different states, preserve both states instead of choosing one. A common pattern is:
+
+- Desktop: text-only black cells with visible borders or dividers; images are hidden until hover or scroll interaction.
+- Mobile: horizontal project strip where the same projects expose their images as static cards.
+
+Model this as `project-card-grid` with a note in the spec's Responsive notes and Motion profile. The generated CSS should hide or dim images on desktop, show them on hover when appropriate, and make images visible by default inside an overflow-x mobile strip. Do not replace the desktop source with always-visible image cards if the desktop screenshot is text-first.
+
+---
+
+### `marquee-strip`
+
+A horizontal moving text/logo strip. Use only when the spec's Motion profile is `marquee`; otherwise render as a normal `logo-strip` or paragraph row.
+
+**Placeholders:** `{{ITEMS}}`, `{{DURATION_SECONDS}}`, `{{DIRECTION}}`.
+
+```html
+<!-- wp:group {"align":"full","className":"clone-marquee","layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull clone-marquee" style="--clone-marquee-duration:{{DURATION_SECONDS}}s">
+  <!-- wp:group {"className":"clone-marquee__track","layout":{"type":"flex","flexWrap":"nowrap"}} -->
+  <div class="wp-block-group clone-marquee__track">
+    <!-- FOREACH item in {{ITEMS}}: -->
+    <!-- wp:paragraph --><p>{{item}}</p><!-- /wp:paragraph -->
+    <!-- END FOREACH -->
+    <!-- Repeat items once so the CSS loop has no visual gap. -->
+    <!-- FOREACH item in {{ITEMS}}: -->
+    <!-- wp:paragraph {"ariaHidden":true} --><p aria-hidden="true">{{item}}</p><!-- /wp:paragraph -->
+    <!-- END FOREACH -->
+  </div>
+  <!-- /wp:group -->
+</div>
+<!-- /wp:group -->
+```
+
+Required CSS:
+
+```css
+.clone-marquee { overflow: hidden; }
+.clone-marquee__track { animation: clone-marquee var(--clone-marquee-duration, 24s) linear infinite; min-width: max-content; }
+.clone-marquee:hover .clone-marquee__track { animation-play-state: paused; }
+@keyframes clone-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .clone-marquee__track { animation: none; transform: none; } }
 ```
 
 ---
@@ -488,9 +621,9 @@ For each of these, emit an **explicit HTML comment** in the generated pattern ra
 | Webflow Ecommerce block | stub + WooCommerce note | `<!-- Webflow Ecommerce block removed — install WooCommerce and replace with product blocks -->` |
 | Cargo gallery widget | keep image list, drop effects | `<!-- Cargo gallery effects dropped — images preserved in core/gallery -->` |
 | Shopify embed (buy button, product card) | stub + WooCommerce note | `<!-- Shopify embed removed — install WooCommerce or use the Shopify Buy Button WP plugin -->` |
-| Marquee / scrolling text strip | static paragraph | `<!-- Marquee dropped — scrolling animation not reproduced -->` |
-| Parallax background | static bg image | `<!-- Parallax dropped — static bg retained -->` |
-| Lottie / scroll-triggered animations | drop | `<!-- Animation dropped — WP core has no equivalent -->` |
+| Marquee / scrolling text strip | `marquee-strip` when simple; static paragraph otherwise | `<!-- Marquee reduced to static strip — complex source timing not reproduced -->` |
+| Parallax background | static bg image; simple fixed attachment only when spec approves | `<!-- Parallax reduced — static bg retained -->` |
+| Lottie / complex scroll-triggered animations | static poster or placeholder | `<!-- Animation reduced — source framework timeline not reproduced -->` |
 | Video background on cover | `core/cover` with poster image | `<!-- Video background reduced to poster image -->` |
 
 ---

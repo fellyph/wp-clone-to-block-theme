@@ -197,6 +197,19 @@
   // scan in-band siblings, preferring gradients > image URLs > solid colors.
   const isGradient = (v) => typeof v === 'string' && /gradient\(/.test(v);
   const isTransparentColor = (v) => !v || v === 'rgba(0, 0, 0, 0)' || v === 'transparent';
+  const extractCssUrls = (value) => {
+    if (!value || value === 'none') return [];
+    return Array.from(String(value).matchAll(/url\((['"]?)(.*?)\1\)/g))
+      .map((match) => match[2])
+      .filter(Boolean)
+      .map((url) => {
+        try {
+          return new URL(url, document.baseURI).href;
+        } catch (e) {
+          return url;
+        }
+      });
+  };
   const pickEffectiveBg = (el, sectionTop, sectionBottom) => {
     const out = { color: null, image: null, source: null };
     // 1. the wrapper itself
@@ -276,6 +289,166 @@
     return acc;
   }, []);
 
+  // ---- Motion / interaction inventory ----
+  // High-fidelity clones of agency and portfolio sites fail when motion is
+  // silently dropped. Capture simple CSS/DOM motion signals up front so specs
+  // can preserve reproducible effects and explicitly stub framework effects.
+  const parseTimeMs = (value) => {
+    return String(value || '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const n = parseFloat(part);
+        if (!Number.isFinite(n)) return 0;
+        return part.endsWith('ms') ? n : n * 1000;
+      })
+      .reduce((max, n) => Math.max(max, n), 0);
+  };
+
+  const elementLabel = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const id = el.id ? `#${el.id}` : '';
+    const className = typeof el.className === 'string' ? el.className : '';
+    const classes = className
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((name) => `.${name}`)
+      .join('');
+    return `${tag}${id}${classes}`;
+  };
+
+  const isDefaultTransform = (value) => {
+    return !value || value === 'none' || value === 'matrix(1, 0, 0, 1, 0, 0)';
+  };
+
+  const isDefaultEffect = (value) => {
+    return !value || value === 'none' || value === 'normal' || value === '0px';
+  };
+
+  const motionForElement = (el) => {
+    const cs = getComputedStyle(el);
+    const tag = el.tagName.toLowerCase();
+    const className = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+    const data = Array.from(el.attributes || [])
+      .map((attr) => `${attr.name}=${attr.value}`)
+      .join(' ')
+      .toLowerCase();
+    const combined = `${className} ${data}`;
+    const signals = [];
+
+    const animationDurationMs = parseTimeMs(cs.animationDuration);
+    const animationDelayMs = parseTimeMs(cs.animationDelay);
+    if (cs.animationName && cs.animationName !== 'none' && (animationDurationMs > 0 || animationDelayMs > 0)) {
+      signals.push('css-animation');
+    }
+
+    const transitionDurationMs = parseTimeMs(cs.transitionDuration);
+    if (cs.transitionProperty && cs.transitionProperty !== 'none' && transitionDurationMs > 0) {
+      signals.push('transition');
+    }
+
+    if (!isDefaultTransform(cs.transform)) signals.push('transform');
+    if (cs.position === 'sticky' || cs.position === 'fixed') signals.push(`position-${cs.position}`);
+    if (cs.willChange && cs.willChange !== 'auto') signals.push('will-change');
+    if (!isDefaultEffect(cs.filter)) signals.push('filter');
+    if (!isDefaultEffect(cs.backdropFilter)) signals.push('backdrop-filter');
+    if (!isDefaultEffect(cs.clipPath)) signals.push('clip-path');
+    if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') signals.push('blend-mode');
+    if (tag === 'video') signals.push('video');
+    if (tag === 'canvas') signals.push('canvas');
+    if (tag === 'svg') signals.push('svg');
+    if (/marquee|ticker|crawl|scrolling-text/.test(combined)) signals.push('marquee-like');
+    if (/slider|carousel|swiper|splide|slideshow/.test(combined)) signals.push('carousel-like');
+    if (/parallax|sticky|pin-spacer|scrolltrigger/.test(combined)) signals.push('scroll-effect');
+    if (/lottie|bodymovin/.test(combined)) signals.push('lottie-like');
+
+    if (signals.length === 0) return null;
+
+    const r = el.getBoundingClientRect();
+    return {
+      selector: elementLabel(el),
+      tag,
+      top: Math.round(r.top + window.scrollY),
+      left: Math.round(r.left),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+      signals: Array.from(new Set(signals)),
+      animation:
+        signals.includes('css-animation')
+          ? {
+              name: cs.animationName,
+              durationMs: animationDurationMs,
+              delayMs: animationDelayMs,
+              iterationCount: cs.animationIterationCount,
+              timingFunction: cs.animationTimingFunction,
+            }
+          : null,
+      transition:
+        signals.includes('transition')
+          ? {
+              property: cs.transitionProperty,
+              durationMs: transitionDurationMs,
+              timingFunction: cs.transitionTimingFunction,
+            }
+          : null,
+      transform: !isDefaultTransform(cs.transform) ? cs.transform.slice(0, 160) : null,
+      position: cs.position,
+    };
+  };
+
+  const motionInventory = Array.from(document.body.querySelectorAll('*'))
+    .filter(isVisible)
+    .map(motionForElement)
+    .filter(Boolean);
+
+  const motionSignalCounts = motionInventory.reduce((acc, item) => {
+    for (const signal of item.signals) acc[signal] = (acc[signal] || 0) + 1;
+    return acc;
+  }, {});
+
+  const countCssKeyframes = () => {
+    let count = 0;
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules;
+      try {
+        rules = sheet.cssRules;
+      } catch (e) {
+        continue;
+      }
+      if (!rules) continue;
+      for (const rule of Array.from(rules)) {
+        if (rule.type === CSSRule.KEYFRAMES_RULE || rule.type === CSSRule.WEBKIT_KEYFRAMES_RULE) count++;
+      }
+    }
+    return count;
+  };
+
+  const motionLibraries = (() => {
+    const resources = performance
+      .getEntriesByType('resource')
+      .map((entry) => entry.name.toLowerCase())
+      .join(' ');
+    const html = document.documentElement.outerHTML.slice(0, 250000).toLowerCase();
+    const haystack = `${resources} ${html}`;
+    return ['gsap', 'scrolltrigger', 'lottie', 'bodymovin', 'swiper', 'splide', 'slick', 'three', 'anime', 'framer']
+      .filter((name) => haystack.includes(name));
+  })();
+
+  const sectionMotion = (el) => {
+    const items = [el, ...Array.from(el.querySelectorAll('*'))]
+      .filter(isVisible)
+      .map(motionForElement)
+      .filter(Boolean);
+    const signals = Array.from(new Set(items.flatMap((item) => item.signals)));
+    return {
+      count: items.length,
+      signals,
+      samples: items.slice(0, 8),
+    };
+  };
+
   const sections = deduped.slice(0, 20).map(({ el }, i) => {
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
@@ -310,7 +483,9 @@
       dividerBelow,
       heading: headingText,
       imgCount: el.querySelectorAll('img').length,
+      videoCount: el.querySelectorAll('video').length,
       btnCount: el.querySelectorAll('a[role="button"], button').length,
+      motion: sectionMotion(el),
     };
   });
 
@@ -384,16 +559,97 @@
     .map((a) => (a.textContent || '').trim())
     .filter(Boolean);
 
-  const images = Array.from(document.querySelectorAll('img'))
+  const imgInventory = Array.from(document.querySelectorAll('img'))
     .filter(isVisible)
-    .slice(0, 12)
     .map((img) => ({
       src: (img.currentSrc || img.src).slice(0, 300),
       alt: img.alt,
       w: img.naturalWidth,
       h: img.naturalHeight,
+      kind: 'img',
     }))
     .filter((i) => i.src && i.w > 100);
+
+  const backgroundImageInventory = Array.from(document.body.querySelectorAll('*'))
+    .filter(isVisible)
+    .flatMap((el) => {
+      const cs = getComputedStyle(el);
+      const urls = extractCssUrls(cs.backgroundImage);
+      if (urls.length === 0) return [];
+      const r = el.getBoundingClientRect();
+      if (r.width < 100 || r.height < 80) return [];
+      return urls.map((url) => ({
+        src: url.slice(0, 300),
+        alt: el.getAttribute('aria-label') || el.getAttribute('title') || '',
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        kind: 'background',
+        rect: {
+          top: Math.round(r.top + window.scrollY),
+          left: Math.round(r.left),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+        },
+      }));
+    });
+
+  const images = (() => {
+    const out = [];
+    const seen = new Set();
+    for (const image of [...imgInventory, ...backgroundImageInventory]) {
+      const key = image.src.replace(/([?&])(w|h|q|quality|fit|crop)_[^&]+/g, '$1');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(image);
+    }
+    return out.slice(0, 36);
+  })();
+
+  const videos = Array.from(document.querySelectorAll('video'))
+    .filter(isVisible)
+    .slice(0, 12)
+    .map((video) => {
+      const r = video.getBoundingClientRect();
+      return {
+        src: (video.currentSrc || video.src || '').slice(0, 300),
+        poster: (video.poster || '').slice(0, 300),
+        w: video.videoWidth || Math.round(r.width),
+        h: video.videoHeight || Math.round(r.height),
+        rect: {
+          top: Math.round(r.top + window.scrollY),
+          left: Math.round(r.left),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+        },
+        autoplay: video.autoplay,
+        loop: video.loop,
+        muted: video.muted,
+        playsInline: video.playsInline,
+      };
+    });
+
+  const inlineSvgs = Array.from(document.querySelectorAll('svg'))
+    .filter(isVisible)
+    .slice(0, 48)
+    .map((svg) => {
+      const r = svg.getBoundingClientRect();
+      const label =
+        svg.getAttribute('aria-label') ||
+        svg.getAttribute('title') ||
+        svg.querySelector('title')?.textContent?.trim() ||
+        '';
+      return {
+        selector: elementLabel(svg),
+        label,
+        viewBox: svg.getAttribute('viewBox') || '',
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        top: Math.round(r.top + window.scrollY),
+        left: Math.round(r.left),
+        paths: svg.querySelectorAll('path, circle, rect, polygon, polyline, line').length,
+        markup: svg.outerHTML.replace(/\s+/g, ' ').slice(0, 1200),
+      };
+    });
 
   // ---- h2 / h1 swap detection ----
   // If the display text is meaningfully larger than what querySelector('h1')
@@ -431,6 +687,18 @@
     palette,
     nav,
     images,
+    media: {
+      videos,
+      inlineSvgs,
+    },
+    motion: {
+      totalElements: motionInventory.length,
+      signalCounts: motionSignalCounts,
+      cssKeyframes: countCssKeyframes(),
+      libraries: motionLibraries,
+      prefersReducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+      samples: motionInventory.slice(0, 30),
+    },
     diagnostics: {
       textCandidates: sized.length,
       sectionCandidates: sectionStrategy === 'semantic' ? semanticCandidates.length : undefined,

@@ -33,7 +33,12 @@
     'gridTemplateColumns', 'gridTemplateRows',
     'borderRadius', 'border', 'boxShadow',
     'position', 'top', 'left', 'zIndex',
-    'opacity', 'transform',
+    'opacity', 'transform', 'overflow',
+    'transitionProperty', 'transitionDuration', 'transitionTimingFunction', 'transitionDelay',
+    'animationName', 'animationDuration', 'animationTimingFunction', 'animationDelay',
+    'animationIterationCount', 'animationDirection', 'willChange',
+    'filter', 'backdropFilter', 'clipPath', 'mixBlendMode',
+    'objectFit', 'objectPosition', 'aspectRatio',
   ];
 
   const extractStyles = (el) => {
@@ -46,6 +51,73 @@
       }
     }
     return out;
+  };
+
+  const extractCssUrls = (value) => {
+    if (!value || value === 'none') return [];
+    return Array.from(String(value).matchAll(/url\((['"]?)(.*?)\1\)/g))
+      .map((match) => match[2])
+      .filter(Boolean)
+      .map((url) => {
+        try {
+          return new URL(url, document.baseURI).href;
+        } catch (e) {
+          return url;
+        }
+      });
+  };
+
+  const parseTimeMs = (value) => {
+    return String(value || '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const n = parseFloat(part);
+        if (!Number.isFinite(n)) return 0;
+        return part.endsWith('ms') ? n : n * 1000;
+      })
+      .reduce((max, n) => Math.max(max, n), 0);
+  };
+
+  const extractMotion = (el) => {
+    const cs = getComputedStyle(el);
+    const tag = el.tagName.toLowerCase();
+    const className = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+    const data = Array.from(el.attributes || [])
+      .map((attr) => `${attr.name}=${attr.value}`)
+      .join(' ')
+      .toLowerCase();
+    const combined = `${className} ${data}`;
+    const signals = [];
+    const animationDurationMs = parseTimeMs(cs.animationDuration);
+    const transitionDurationMs = parseTimeMs(cs.transitionDuration);
+
+    if (cs.animationName && cs.animationName !== 'none' && animationDurationMs > 0) signals.push('css-animation');
+    if (cs.transitionProperty && cs.transitionProperty !== 'none' && transitionDurationMs > 0) signals.push('transition');
+    if (cs.transform && cs.transform !== 'none' && cs.transform !== 'matrix(1, 0, 0, 1, 0, 0)') signals.push('transform');
+    if (cs.position === 'sticky' || cs.position === 'fixed') signals.push(`position-${cs.position}`);
+    if (cs.willChange && cs.willChange !== 'auto') signals.push('will-change');
+    if (cs.filter && cs.filter !== 'none') signals.push('filter');
+    if (cs.backdropFilter && cs.backdropFilter !== 'none') signals.push('backdrop-filter');
+    if (cs.clipPath && cs.clipPath !== 'none') signals.push('clip-path');
+    if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') signals.push('blend-mode');
+    if (tag === 'video') signals.push('video');
+    if (tag === 'canvas') signals.push('canvas');
+    if (tag === 'svg') signals.push('svg');
+    if (/marquee|ticker|crawl|scrolling-text/.test(combined)) signals.push('marquee-like');
+    if (/slider|carousel|swiper|splide|slideshow/.test(combined)) signals.push('carousel-like');
+    if (/parallax|sticky|pin-spacer|scrolltrigger/.test(combined)) signals.push('scroll-effect');
+    if (/lottie|bodymovin/.test(combined)) signals.push('lottie-like');
+
+    if (signals.length === 0) return null;
+    return {
+      signals: Array.from(new Set(signals)),
+      animationName: cs.animationName !== 'none' ? cs.animationName : null,
+      animationDurationMs,
+      transitionProperty: cs.transitionProperty !== 'none' ? cs.transitionProperty : null,
+      transitionDurationMs,
+    };
   };
 
   const isVisible = (el) => {
@@ -89,6 +161,7 @@
     const tag = el.tagName.toLowerCase();
     if (/^h[1-6]$/.test(tag)) return 'heading';
     if (tag === 'img') return 'image';
+    if (tag === 'video') return 'video';
     if (tag === 'a' || tag === 'button') return 'button';
     if (tag === 'p') return 'paragraph';
     if (tag === 'ul' || tag === 'ol') return 'list';
@@ -127,6 +200,9 @@
       styles: extractStyles(el),
     };
 
+    const motion = extractMotion(el);
+    if (motion) node.motion = motion;
+
     if (ownText) node.text = ownText;
 
     if (el.tagName === 'IMG') {
@@ -135,6 +211,32 @@
         alt: el.alt || '',
         naturalWidth: el.naturalWidth,
         naturalHeight: el.naturalHeight,
+      };
+    }
+
+    if (el.tagName === 'VIDEO') {
+      node.video = {
+        src: (el.currentSrc || el.src || '').slice(0, 400),
+        poster: (el.poster || '').slice(0, 400),
+        videoWidth: el.videoWidth,
+        videoHeight: el.videoHeight,
+        autoplay: el.autoplay,
+        loop: el.loop,
+        muted: el.muted,
+        playsInline: el.playsInline,
+      };
+    }
+
+    if (el.tagName === 'SVG') {
+      node.svg = {
+        label:
+          el.getAttribute('aria-label') ||
+          el.getAttribute('title') ||
+          el.querySelector('title')?.textContent?.trim() ||
+          '',
+        viewBox: el.getAttribute('viewBox') || '',
+        paths: el.querySelectorAll('path, circle, rect, polygon, polyline, line').length,
+        markup: el.outerHTML.replace(/\s+/g, ' ').slice(0, 1200),
       };
     }
 
@@ -164,8 +266,11 @@
 
   // Also produce a flat summary that's easier to consume in spec files
   const flatImages = [];
+  const flatBackgroundImages = [];
   const flatText = [];
   const flatButtons = [];
+  const flatVideos = [];
+  const flatSvgs = [];
 
   const collect = (node) => {
     if (!node) return;
@@ -176,6 +281,39 @@
         w: node.image.naturalWidth,
         h: node.image.naturalHeight,
         rect: node.rect,
+      });
+    }
+    if (node.styles && node.styles.backgroundImage) {
+      for (const src of extractCssUrls(node.styles.backgroundImage)) {
+        flatBackgroundImages.push({
+          src,
+          alt: '',
+          w: node.rect.width,
+          h: node.rect.height,
+          rect: node.rect,
+          kind: 'background',
+        });
+      }
+    }
+    if (node.video) {
+      flatVideos.push({
+        src: node.video.src,
+        poster: node.video.poster,
+        w: node.video.videoWidth,
+        h: node.video.videoHeight,
+        rect: node.rect,
+        autoplay: node.video.autoplay,
+        loop: node.video.loop,
+        muted: node.video.muted,
+      });
+    }
+    if (node.svg) {
+      flatSvgs.push({
+        label: node.svg.label,
+        viewBox: node.svg.viewBox,
+        paths: node.svg.paths,
+        rect: node.rect,
+        markup: node.svg.markup,
       });
     }
     if (node.role === 'heading' || node.role === 'subheading') {
@@ -277,6 +415,9 @@
     flat: {
       text: flatText.slice(0, 30),
       images: flatImages.slice(0, 30),
+      backgroundImages: flatBackgroundImages.slice(0, 30),
+      videos: flatVideos.slice(0, 20),
+      svgs: flatSvgs.slice(0, 30),
       buttons: flatButtons.slice(0, 20),
     },
   };

@@ -16,7 +16,7 @@ Copy this template verbatim for every section. Fill every field. If a field trul
 ## Identity
 
 - **Index in page:** <n from analysis.json.sections>
-- **Interaction model:** <static | cover-with-headline | media-text | columns | gallery | logo-strip | testimonial | cta | blog-card-grid | price-list | color-block-grid | footer | nav>
+- **Interaction model:** <static | cover-with-headline | animated-cover | media-text | columns | gallery | logo-strip | testimonial | cta | blog-card-grid | project-card-grid | price-list | color-block-grid | marquee-strip | horizontal-showcase | footer | nav>
 - **Y band:** top=<px>, height=<px>
 - **Framework-specific widget:** <none | marquee | store | booking | form | chat | members | cms-collection | shopify-embed>
 - **Copyright flag:** <none | contains trademarked logos | contains celebrity photography | contains copyrighted editorial imagery>
@@ -50,11 +50,19 @@ Copy this template verbatim for every section. Fill every field. If a field trul
 
 ## Images used in this section
 
-For each image in `sections/<n>.json.flat.images`, list:
+For each image in `sections/<n>.json.flat.images` and `sections/<n>.json.flat.backgroundImages`, list:
 
-- `assets/img-<nn>.<ext>` — original alt "<alt>" — captured rect <w×h> — position in section <top-left | center | right-column | grid-item-N>
+- `assets/img-<nn>.<ext>` — kind `<img | background>` — original alt "<alt>" — captured rect <w×h> — position in section <top-left | center | right-column | grid-item-N>
 
 If this section has **layered images** (background + foreground stacked), list them in back-to-front order and mark which are positioned as `absolute`.
+
+## Inline SVGs / icons
+
+For each meaningful non-downloadable SVG in `sections/<n>.json.flat.svgs`, list:
+
+- label/viewBox/path count — captured rect <w×h> — role <icon | badge | arrow | decorative> — WP reproduction <inline SVG | CSS approximation | omit as decorative>
+
+Small page-builder arrows, checkmarks, service icons, award badges, and social icons often arrive as inline SVG rather than `img`. Record them here so the pattern generator preserves visible UI chrome instead of replacing it with generic glyphs.
 
 ## Layout
 
@@ -66,6 +74,18 @@ If this section has **layered images** (background + foreground stacked), list t
 - **Divider above:** <color + thickness (e.g. "rgba(255,255,255,0.15) 1px"), or n/a>
 - **Divider below:** <color + thickness, or n/a>
 - **Responsive notes:** <how does this change at 390px from the mobile screenshot?>
+
+## Motion profile
+
+- **Motion class:** <none | css-transition | css-keyframes | entry-reveal | marquee | carousel | parallax | video | lottie | scroll-triggered>
+- **Captured signals:** <from `analysis.sections[n].motion.signals`, e.g. transition, transform, carousel-like>
+- **Animated elements:** <count from section motion>
+- **Media fallback:** <video poster path | carousel reduced to project grid | static final state | n/a>
+- **Timing:** <duration/delay/easing from `.capture/sections/<n>.json.tree[*].motion`, or n/a>
+- **Start state:** <opacity/transform/position if visible in `motion-start.png`, or n/a>
+- **End state:** <settled final state from `desktop.png`, or n/a>
+- **Reduced-motion behavior:** <disable animation and show final state | keep static poster | n/a>
+- **WP reproduction plan:** <theme-scoped CSS class | static fallback with explicit comment | plugin required>
 
 ## Generation instructions
 
@@ -96,7 +116,7 @@ Read the matching `.capture/sections/<n>.json`. That file has three top-level ke
 
 - `wrapper` — the section container's tag, rect, and computed styles. Use this for **Captured palette** (background color, text color, overlay detection via `backgroundImage`).
 - `tree` — the full DOM tree. Walk it to find per-element styles if you need more than the flat summary.
-- `flat` — shortcut arrays: `text[]`, `images[]`, `buttons[]`. This is where most of the **Real content** and **Images** data comes from.
+- `flat` — shortcut arrays: `text[]`, `images[]`, `backgroundImages[]`, `svgs[]`, `videos[]`, `buttons[]`. This is where most of the **Real content**, **Images**, and **Inline SVGs / icons** data comes from.
 
 Example — given this `flat` payload from a captured section:
 
@@ -143,6 +163,8 @@ The spec file for this section fills like:
 
 A spec file is complete when a human who has never seen the source page can read only this file and write the matching WP block pattern without guessing. If your generator has to make assumptions, go back to `.capture/sections/<n>.json` and re-read until you can fill the gap.
 
+For complex UI sites, "complete" also means a human can tell what happens when the section moves. If the section has hover cards, entry reveals, marquees, carousels, parallax, video, or framework animation markers, the Motion profile must say whether WP preserves it, reduces it, or stubs it with an explicit comment.
+
 If you write `n/a` for more than 3 fields, the section probably needs re-extraction — either the section index was wrong, or the wrapper detection picked an empty outer container instead of the real section. Re-run `scripts/extract-section.js` with a different Y-band and try again.
 
-The spec must also pass the 8-item pre-dispatch checklist in `SKILL.md` step 4 before the section goes out to a builder. If any gate fails, fix the spec first.
+The spec must also pass the 10-item pre-dispatch checklist in `SKILL.md` step 4 before the section goes out to a builder. If any gate fails, fix the spec first.

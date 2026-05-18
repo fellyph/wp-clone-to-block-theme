@@ -13,13 +13,14 @@ The pattern is borrowed from the Next.js cloner `ai-website-cloner-template-mast
   git add theme/theme.json theme/style.css theme/templates/ theme/parts/ theme/assets/ specs/ .capture/
   git commit -m "foundation: theme.json, tokens, assets, specs"
   ```
-- The 8-item pre-dispatch checklist from `SKILL.md` step 4 must pass for every spec being dispatched. Do not dispatch a builder with a partial spec — the builder will produce a partial pattern and you'll pay the wall-clock cost of re-dispatch.
+- The 10-item pre-dispatch checklist from `SKILL.md` step 4 must pass for every spec being dispatched. Do not dispatch a builder with a partial spec — the builder will produce a partial pattern and you'll pay the wall-clock cost of re-dispatch.
 - The build gate must have passed on `main` right before dispatch:
   ```bash
   python3 -c "import json; j = json.load(open('theme/theme.json')); assert j['version'] == 3; assert '$schema' in j"
   node --check <skill-path>/scripts/extract.js
   node --check <skill-path>/scripts/extract-section.js
   ```
+  After patterns are merged, also run `node <skill-path>/scripts/validate-artifacts.js ./clones/<slug>` before deploy.
 
 ## Dispatch rules
 
@@ -97,6 +98,14 @@ done
 ```
 
 Because each worktree only touches `theme/patterns/section-<n>.php`, merges are conflict-free by construction. If a merge does report a conflict, it means a builder violated the file-ownership rule — reject the merge, inspect the diff, and redispatch that section with a stricter prompt.
+
+After the last merge, run the artifact validator:
+
+```bash
+node <skill-path>/scripts/validate-artifacts.js ./clones/<slug>
+```
+
+If it fails, fix the section pattern or spec before launching Playground. A syntactically valid pattern that references an image not listed in the spec is still a failed generation.
 
 ## Worktree cleanup
 

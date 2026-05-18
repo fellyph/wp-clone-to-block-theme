@@ -49,6 +49,20 @@ If `tokens.pageBackground` is non-null, emit it into `theme.json` `styles.backgr
 
 With this set, the pattern generator MUST omit `backgroundColor` / `style.background` on any section whose `effectiveBg.source === 'pageBackground'` — painting it twice produces visible stripes as each `core/group` restarts the gradient. Sections with a locally-scoped gradient (`source: 'wrapper' | 'ancestor' | 'sibling'`) still emit inline per `section-mapping.md` gradient rule.
 
+Also emit a `style.css` fallback for page-wide gradients because WordPress Playground/Core can apply only the inline global styles for block themes until the theme stylesheet is explicitly enqueued. Use `functions.php` from the skeleton to enqueue `style.css`, and prefer a scroll-sized full-page background for visual QA screenshots:
+
+```css
+body {
+  background-color: <dominant-end-stop>;
+  background-image: <captured-gradient>;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  background-attachment: scroll;
+}
+```
+
+Avoid `background-attachment: fixed` for benchmark screenshots unless the source capture visibly requires it; full-page screenshot tools often paint fixed backgrounds only for the first viewport.
+
 ### Gradient color stops
 
 If any `sections[].effectiveBg.image` is a gradient, parse its first two color stops with a simple regex (`#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)`) and check each against the palette above. If one of the stops is within ~20 LAB units of `primary` or `secondary`, no change — the gradient will read as a brand tint. If neither stop matches, add the two stops as additional palette entries (`accent-start`, `accent-end`) so later edits in the Site Editor surface them as pickable colors. Don't try to auto-register gradient **presets** in `theme.json` for this iteration — inline `style.background` on each `core/group` (per `section-mapping.md`) is enough.
