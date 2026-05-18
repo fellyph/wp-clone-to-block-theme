@@ -26,13 +26,14 @@ Every section of `design.md` fills from `.capture/*` artifacts, never from the l
 | 6. Depth & elevation | `boxShadow` values on the top-5 largest-area cards in `sections/<n>.json.tree` |
 | 7. Do's and don'ts | Programmatic seeds from sections 2-6 (see rules below) |
 | 8. Responsive behavior | Mobile screenshot `mobile.png` vs desktop; inferred breakpoints — mark "inferred, not captured" when no `@media` rules were extracted |
-| 9. Agent prompt guide | Quick reference block from section 2, example prompts filled from sections 3-6 |
+| 9. Motion & interaction system | `analysis.json.motion`, `analysis.json.sections[*].motion`, `.capture/sections/<n>.json.tree[*].motion`, benchmark `motion-start.png` / `motion-end.png` |
+| 10. Agent prompt guide | Quick reference block from sections 2 and 9, example prompts filled from sections 3-6 |
 
 ## Filename and path
 
 `./clones/<slug>/design.md` — always at the clone root, never nested under `theme/`. The theme directory is a WP-consumable artifact; `design.md` is the contract driving that artifact.
 
-## The 9-section template
+## The 10-section template
 
 Fill every section. If a section truly does not apply (e.g. no shadows detected anywhere → Depth & Elevation becomes "Flat design — no elevation"), still include the heading with a one-line explanation; don't omit headings.
 
@@ -234,7 +235,27 @@ If the source has no detectable shadows anywhere, collapse to a single line: "Fl
 
 **Image behavior** — `{carousel | static | lazy-load}` at each size.
 
-### 9. Agent Prompt Guide
+### 9. Motion & Interaction System
+
+Describe the site's motion voice in one paragraph: static/editorial, subtle premium reveals, playful kinetic, slideshow-led, parallax-heavy, or framework-driven. Use captured values from `analysis.motion` rather than guessing.
+
+**Motion inventory**
+| Signal | Count | Where used | Reproduction |
+|---|---:|---|---|
+| `css-transition` | {count} | {sections} | theme-scoped hover/focus CSS |
+| `css-keyframes` | {count} | {sections} | copy timing into `style.css` if simple |
+| `marquee-like` | {count} | {sections} | CSS marquee or static strip |
+| `carousel-like` | {count} | {sections} | responsive grid or carousel plugin note |
+| `scroll-effect` | {count} | {sections} | static final state unless simple |
+| `video/lottie/canvas` | {count} | {sections} | poster/static fallback with comment |
+
+**Rules**
+- Preserve simple opacity/transform reveals with the captured duration, easing, and final visible state.
+- Keep hover overlays additive; mobile must show the same labels without hover.
+- Disable non-essential motion under `prefers-reduced-motion: reduce`.
+- Do not recreate cookie banners, chat popups, or builder chrome as theme content.
+
+### 10. Agent Prompt Guide
 
 **Quick color reference** — compact key=value block:
 

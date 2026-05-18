@@ -2,8 +2,9 @@
 
 Capture a page into `./clones/<slug>/.capture/` so the rest of the workflow can work from stable local artifacts. The capture produces:
 
-- `desktop.png`, `mobile.png` — full-page screenshots at 1440 and 390
-- `analysis.json` — top-level tokens, sections, nav, image inventory (from `scripts/extract.js`)
+- `desktop.png`, `mobile.png` — full-page settled screenshots at 1440 and 390
+- `motion-start.png`, `motion-end.png` — initial desktop viewport frames for visible entry/motion comparison
+- `analysis.json` — top-level tokens, sections, nav, image inventory, and motion inventory (from `scripts/extract.js`)
 - `sections/<n>.json` — one per section, full DOM tree + computed styles + text + images (from `scripts/extract-section.js`)
 - `assets/img-NN.ext` — every image downloaded from its CDN while the URL is still valid
 - `assets/manifest.json` — mapping from local filenames to original URLs and alt text
@@ -17,15 +18,27 @@ mcp__chrome-devtools__new_page { url: "<url>" }
 mcp__chrome-devtools__resize_page { width: 1440, height: 900 }
 ```
 
-Many modern sites are JS-rendered and lazy-load heavily. Stabilize with a single combined script that waits, scrolls to the bottom to hydrate lazy sections, then scrolls back to the top:
+Many modern sites are JS-rendered and lazy-load heavily. Stabilize with a combined script that waits, walks the page in viewport-sized steps to hydrate lazy sections, then scrolls back to the top. A single jump to the bottom is not enough for Wix portfolio pages that reveal each project only when its band enters the viewport:
 
 ```
-mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2500)); window.scrollTo(0, document.body.scrollHeight); await new Promise(r => setTimeout(r, 1500)); window.scrollTo(0, 0); await new Promise(r => setTimeout(r, 500)); return { title: document.title, h: document.body.scrollHeight }; }" }
+mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2500)); let previousHeight = 0; let h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); const step = Math.max(420, Math.floor(window.innerHeight * 0.72)); for (let pass = 0; pass < 2; pass++) { for (let y = 0; y <= h + window.innerHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 220)); h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); } if (h === previousHeight) break; previousHeight = h; } window.scrollTo(0, 0); await new Promise(r => setTimeout(r, 700)); return { title: document.title, h, images: Array.from(document.images).filter(img => img.complete && img.naturalWidth > 0).length }; }" }
 ```
 
-If a cookie banner blocks the hero, take a snapshot, locate its dismiss button by `uid`, and click it with `mcp__chrome-devtools__click` before continuing.
+If the settled screenshot shows content that `analysis.json.images[]` missed, or if mid-page crops are blank where section headings/assets are known to exist, rerun extraction after this stepped-scroll pass and replace `analysis.json` before downloading assets. Treat the screenshot as the authority: missing lazy image inventory is a capture failure, not a sparse design.
+
+If a cookie/privacy banner is visible, take a snapshot, locate its dismiss/accept/decline button by `uid`, and click it with `mcp__chrome-devtools__click` before continuing. Do this even when the banner sits between sections rather than directly blocking the hero — otherwise visual QA will force the clone to reproduce transient consent UI instead of the actual site. If a benchmark intentionally keeps the banner, record it in `notes.md` and in the section spec as `Framework-specific widget: cookie-banner`.
+
+Cookie/banner text to look for before screenshots: `we use cookies`, `accept cookies`, `cookie settings`, `decline all`, `privacy policy`.
 
 ## 2. Screenshots
+
+Initial motion frames, before the final stabilization pass:
+```
+mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 500)); return document.title; }" }
+mcp__chrome-devtools__take_screenshot { fullPage: false, filePath: ".capture/<slug>/motion-start.png" }
+mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 1500)); return document.title; }" }
+mcp__chrome-devtools__take_screenshot { fullPage: false, filePath: ".capture/<slug>/motion-end.png" }
+```
 
 Full-page desktop:
 ```
@@ -77,6 +90,14 @@ The returned JSON has this shape:
   "palette":  [ { "hex": "#rrggbb", "count": 123 } ],   // from hero-image histogram
   "nav":      [ "Home", "About", ... ],
   "images":   [ { "src": "...", "alt": "...", "w": 1600, "h": 900 } ],
+  "media":    { "videos": [ { "src": "...", "poster": "...", "w": 1920, "h": 1080 } ] },
+  "motion": {
+    "totalElements": 12,
+    "signalCounts": { "transition": 8, "css-animation": 2, "carousel-like": 1 },
+    "cssKeyframes": 4,
+    "libraries": [ "gsap" ],
+    "samples": [ { "selector": "div.hero", "signals": [ "transition", "transform" ] } ]
+  },
   "diagnostics": {
     "textCandidates": 312,
     "sectionStrategy": "semantic",   // "semantic" if <section>/<header>/etc. were usable; "y-band" if it fell back to geometric clustering
@@ -97,16 +118,27 @@ Save the result as `.capture/<slug>/analysis.json`.
 - **`diagnostics.sectionStrategy`** tells you which detection path ran. `'semantic'` means `<section>/<header>/<footer>/...` were good enough; `'y-band'` means the page has no usable semantic landmarks and the geometric fallback was used. Both are fine; the field exists so you can record which strategy the site demanded.
 - **`sections`** is already deduped (desktop+mobile DOM variants are collapsed by the ±40px Y-band rule). Expect 5–12 on a well-structured site.
 - **`tokens.pageBackground`** is set when a single gradient element covers ≥80% of `pageHeight` and ≥60% of viewport width — this is the "one long gradient behind the whole page" pattern that builder templates paint as a body background. When this field is non-null, write the gradient into `theme.json` `styles.background.gradient` so `<body>` inherits it, and **do not** re-emit it on any section pattern. Any section whose `effectiveBg.image` matched this gradient will already have `effectiveBg = { image: null, source: 'pageBackground' }` so the pattern generator can cleanly skip background emission.
-- **`sections[i].effectiveBg`** is the bg a user actually sees, recovered by walking up to 4 ancestors and scanning absolutely-positioned siblings whose Y band overlaps the section by ≥80%. Page builders (Wix, Webflow, Squarespace) routinely layer gradients on a separate background div while the semantic section wrapper stays transparent, so `bg` / `bgImage` alone will miss them. Prefer `effectiveBg.image` when emitting a pattern; fall back to `effectiveBg.color`, then `bg` / `bgImage`. Respect the `source` field: `'pageBackground'` and `'inherited'` both mean "the body or a preceding section owns this bg — do not emit".
+- **`sections[i].effectiveBg`** is the bg a user actually sees, recovered by walking up to 4 ancestors and scanning absolutely-positioned siblings whose Y band overlaps the section by ≥80%. Page builders (Wix, Webflow, Squarespace) routinely layer gradients and images on a separate background div while the semantic section wrapper stays transparent, so `bg` / `bgImage` alone will miss them. Prefer `effectiveBg.image` when emitting a pattern; fall back to `effectiveBg.color`, then `bg` / `bgImage`. Respect the `source` field: `'pageBackground'` and `'inherited'` both mean "the body or a preceding section owns this bg — do not emit".
 - **`sections[i].dividerAbove` / `dividerBelow`** are thin (1–4 px) horizontal rules that span ≥60% of the viewport and sit within 40 px of the section's top or bottom edge. Emit a `core/separator` block when they're present; don't invent one when absent.
 - **`dividers[]`** lists every candidate divider on the page. Useful for cross-referencing when a divider sits between two sections and you want to confirm attribution.
+- **`motion`** lists CSS transitions/keyframes, transform states, sticky/fixed elements, carousel/marquee/parallax/Lottie-like markers, and known animation libraries. Use `references/animation-capture.md` to decide whether to preserve, reduce, or stub each motion class.
+- **`sections[i].motion`** is the section-scoped subset of the motion inventory. It must be copied into the spec's Motion profile.
+- **`images[]`** includes both visible `<img>` elements and CSS `background-image` URLs. The `kind` field is `img` or `background`; background entries include a `rect` so project-card and hero media can be placed correctly.
+- **`media.videos[]`** lists visible video elements with poster/source URLs and rects. Use the poster as the default WordPress fallback. If no poster exists, document the missing frame in the section spec and prefer a nearby captured still, texture, or GIF with the same visual role before falling back to a same-size placeholder.
+- **Video/canvas frame instability:** when the downloaded poster/background URL renders a different frame than `desktop.png` or `mobile.png`, create a local captured-still asset from the screenshot crop for that section (for example `assets/img-37.png`) and list it in the spec. This is the correct fallback for Wix video or Three.js heroes whose visible frame is not represented by a stable poster URL.
 - **`diagnostics.afterDedupe < 3`** is a failure signal — the page has no recoverable section structure. Fall back to the screenshot-only flow (see Known limitations).
 
 ## 4. Download every captured image (do NOT defer)
 
 Many image CDNs sign their URLs, geoblock, or rate-limit. Download **immediately** after extraction, before moving to the per-section loop. Don't filter — download all of them so the per-section step has local paths available for every image it might reference.
 
-Write a Bash loop that iterates `analysis.json.images[]`:
+Prefer the bundled downloader, which handles `<img>`, CSS background images, and visible video posters:
+
+```bash
+node <skill-path>/scripts/download-assets.js ./clones/$SLUG/.capture/analysis.json ./clones/$SLUG/.capture/assets
+```
+
+If that is unavailable, write a Bash loop that iterates `analysis.json.images[]`:
 
 ```bash
 SLUG="<slug>"
