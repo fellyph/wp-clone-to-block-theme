@@ -49,7 +49,7 @@ If `tokens.pageBackground` is non-null, emit it into `theme.json` `styles.backgr
 
 With this set, the pattern generator MUST omit `backgroundColor` / `style.background` on any section whose `effectiveBg.source === 'pageBackground'` — painting it twice produces visible stripes as each `core/group` restarts the gradient. Sections with a locally-scoped gradient (`source: 'wrapper' | 'ancestor' | 'sibling'`) still emit inline per `section-mapping.md` gradient rule.
 
-Also emit a `style.css` fallback for page-wide gradients because WordPress Playground/Core can apply only the inline global styles for block themes until the theme stylesheet is explicitly enqueued. Use `functions.php` from the skeleton to enqueue `style.css`, and prefer a scroll-sized full-page background for visual QA screenshots:
+Also emit a `style.css` fallback for page-wide gradients because Studio/Core can apply only the inline global styles for block themes until the theme stylesheet is explicitly enqueued. Use `functions.php` from the skeleton to enqueue `style.css`, and prefer a scroll-sized full-page background for visual QA screenshots:
 
 ```css
 body {

@@ -2,7 +2,7 @@
 
 A [Claude Code](https://claude.com/claude-code) skill that clones a public website into a WordPress block theme.
 
-Given a URL, the skill extracts design tokens and real content via chrome-devtools MCP, emits per-section spec files from `getComputedStyle()`, generates a full block theme (`theme.json` + templates + parts + one pattern per section), and deploys it to a local WordPress via [`@wp-playground/cli`](https://wordpress.github.io/wordpress-playground/developers/local-development/wp-playground-cli/) for side-by-side visual QA.
+Given a URL, the skill extracts design tokens and real content via chrome-devtools MCP, emits per-section spec files from `getComputedStyle()`, generates a full block theme (`theme.json` + templates + parts + one pattern per section), and deploys it to a local WordPress via [WordPress Studio CLI](https://developer.wordpress.com/docs/developer-tools/studio/cli/) for side-by-side visual QA.
 
 Output is a **structural** clone with real assets and verbatim copy — not a pixel-perfect scrape. Designed for benchmark / reference work where WordPress core blocks can represent the source page's layout.
 
@@ -10,13 +10,14 @@ Output is a **structural** clone with real assets and verbatim copy — not a pi
 
 - A runnable WordPress block theme per source URL under `./clones/<slug>/theme/`
 - Captured source screenshots, per-section JSON, and downloaded assets under `./clones/<slug>/.capture/`
-- A deployed local preview at `http://127.0.0.1:9400/` with the clone activated
+- A deployed local Studio preview with the clone activated; use `studio site status --path ./clones/<slug>/studio-site` for the URL
 - Side-by-side desktop + mobile screenshots for visual diff
 
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code) with the `chrome-devtools` MCP
-- Node.js 18+ (`npx @wp-playground/cli@latest`)
+- Node.js 18+ for helper scripts
+- WordPress Studio CLI (`studio`) installed from Studio Settings or the standalone CLI
 - `curl`, `bash`, `python3`, `node`, `git`
 
 ## Install
@@ -55,7 +56,7 @@ The skill runs 7 ordered steps:
 4. **Pre-dispatch checklist** — 8-item hard gate per spec before it goes to a builder.
 5. **Parallel dispatch** — one builder subagent per spec, each in its own `git worktree`, writing exactly one `patterns/section-<n>.php`.
 6. **Assemble** — wires patterns into `front-page.html`, emits header + footer parts.
-7. **Deploy + visual QA** — launches `npx @wp-playground/cli@latest server ...`, screenshots `http://127.0.0.1:9400/`, diffs against the source capture. 3-iteration budget.
+7. **Deploy + visual QA** — runs `node scripts/studio-site.js deploy ./clones/<slug>`, screenshots the URL from `studio site status --path ./clones/<slug>/studio-site`, and diffs against the source capture. 3-iteration budget.
 
 See [`SKILL.md`](SKILL.md) for the full workflow and [`references/`](references/) for per-step procedures.
 
@@ -73,11 +74,11 @@ See [`SKILL.md`](SKILL.md) for the full workflow and [`references/`](references/
 │   ├── section-mapping.md            # 9 interaction-model → WP block templates
 │   ├── theme-tokens.md               # theme.json rules + commercial-to-free fonts
 │   ├── parallel-dispatch.md          # worktree setup, builder prompt, merge
-│   ├── playground-cli.md             # @wp-playground/cli launch + blueprint
+│   ├── studio-cli.md                 # Studio CLI deploy, WP-CLI, preview flow
 │   └── visual-qa.md                  # deploy + screenshot + diff
 └── assets/
     ├── block-theme-skeleton/         # starter theme.json + templates + parts
-    └── blueprint-template.json       # @wp-playground/cli blueprint
+    └── blueprint-template.json       # Studio-compatible Blueprint setup
 ```
 
 ## Design notes
@@ -87,7 +88,7 @@ See [`SKILL.md`](SKILL.md) for the full workflow and [`references/`](references/
 - **Foundation-first sequencing** — `theme.json`, fonts, and `assets/` land on the main branch before any spec is dispatched, so worktrees never race on shared state.
 - **Brightness-based cover rule** — `core/cover` forces inner text white on overlay; on light backgrounds (brightness ≥ 200) the templates emit `core/group` with explicit contrast text instead.
 - **8-item pre-dispatch checklist** — every spec must pass before a builder sees it (spec exists, computed styles captured, interaction model set, copyright flagged, images local-pathed, brightness recorded, template name valid, spec ≤ 150 lines).
-- **CLI playground for deploy** — no MCP WebSocket bridge, no base64 binary upload, no iframe screenshot surgery. The theme is mounted from disk; edits to `theme/patterns/*.php` take effect on page reload.
+- **Studio CLI for deploy** — no MCP WebSocket bridge, no base64 binary upload, no iframe screenshot surgery. The theme is synced into a nested Studio site; rerun the deploy helper after edits and reload the reported local URL.
 
 ## Acknowledgments
 

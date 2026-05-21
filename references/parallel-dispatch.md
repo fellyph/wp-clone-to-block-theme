@@ -105,7 +105,7 @@ After the last merge, run the artifact validator:
 node <skill-path>/scripts/validate-artifacts.js ./clones/<slug>
 ```
 
-If it fails, fix the section pattern or spec before launching Playground. A syntactically valid pattern that references an image not listed in the spec is still a failed generation.
+If it fails, fix the section pattern or spec before launching Studio. A syntactically valid pattern that references an image not listed in the spec is still a failed generation.
 
 ## Worktree cleanup
 

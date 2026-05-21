@@ -1,11 +1,11 @@
 # Visual QA diff
 
-Mandatory final step. Deploy the generated theme to a local WordPress via `@wp-playground/cli`, screenshot the rendered result, and iterate until the diff against the captured source is acceptable. Do not declare the clone complete without this step.
+Mandatory final step. Deploy the generated theme to a local WordPress site via WordPress Studio CLI, screenshot the rendered result, and iterate until the diff against the captured source is acceptable. Do not declare the clone complete without this step.
 
 ## Contents
 
-1. Deploy (local playground)
-2. Screenshot (chrome-devtools against `http://localhost:9400`)
+1. Deploy with Studio CLI
+2. Screenshot the Studio URL
 3. Diff
 4. Motion QA
 5. Failure classes (A / B / C)
@@ -13,35 +13,31 @@ Mandatory final step. Deploy the generated theme to a local WordPress via `@wp-p
 7. Diff report output
 8. When the `core/cover` white-text bug bites
 
-## 1. Deploy (local playground)
+## 1. Deploy with Studio CLI
 
-Full procedure lives in `references/playground-cli.md`. The short version:
+Full procedure lives in `references/studio-cli.md`. The short version:
 
 0. Run the artifact validator and fix any failures before launching WordPress:
    ```bash
    node <skill-path>/scripts/validate-artifacts.js ./clones/<slug>
    ```
-1. Copy `assets/blueprint-template.json` to `./clones/<slug>/blueprint.json` and replace `THEME_SLUG` with the theme folder name (`supermembros`, `roeeby`, etc.).
-2. Launch the CLI playground in the background (Claude Code: `Bash` tool with `run_in_background: true`):
+1. Deploy or resync the clone into a nested Studio site:
    ```bash
-   npx @wp-playground/cli@latest server \
-     --port=9400 \
-     --mount=./clones/<slug>/theme:/wordpress/wp-content/themes/<slug> \
-     --blueprint=./clones/<slug>/blueprint.json
+   node scripts/studio-site.js deploy ./clones/<slug>
    ```
-3. Poll until the server responds:
+2. Read the local URL from Studio:
    ```bash
-   until curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9400/ | grep -q '^200$'; do sleep 1; done
+   studio site status --path ./clones/<slug>/studio-site
    ```
 
-No file upload. No base64 binaries. The theme is mounted directly from disk — changes to `theme/patterns/*.php` or `theme/style.css` only need a page reload to take effect (unless WP caches templates; `?nocache=1` forces a rebuild).
+The generated theme remains at `./clones/<slug>/theme/`. The deploy helper copies it into `./clones/<slug>/studio-site/wp-content/themes/<slug>/`, activates it, and repeats the static front-page setup. After editing `theme/patterns/*.php` or `theme/style.css`, rerun the deploy helper and reload the Studio URL.
 
-## 2. Screenshot (chrome-devtools against `http://localhost:9400`)
+## 2. Screenshot the Studio URL
 
-Because the site is a real HTTP URL — not an iframe inside `playground.wordpress.net` — chrome-devtools can screenshot it directly. Skip the iframe-resizing workaround from the previous workflow; it is no longer needed.
+Use the local URL printed by `studio site status`; do not assume a fixed port. Because the site is a real HTTP URL, chrome-devtools can screenshot it directly.
 
 ```
-mcp__chrome-devtools__new_page { url: "http://127.0.0.1:9400/" }
+mcp__chrome-devtools__new_page { url: "<studio-local-url>" }
 mcp__chrome-devtools__resize_page { width: 1280, height: 1400 }
 # Wait ~2s for WP to hydrate fonts + images:
 mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2000)); return document.title; }" }
@@ -56,7 +52,7 @@ mcp__chrome-devtools__take_screenshot { fullPage: true, filePath: "clones/<slug>
 
 After capture, check the actual screenshot dimensions. Some Wix layouts keep a fixed wide canvas on a 390px viewport, so `mobile.png` may be wider than 390px (for example `980px`). In that case, reproduce the source `scrollWidth` with a theme-scoped `min-width` instead of forcing a narrow responsive stack; visual QA should compare against the captured mobile image dimensions, not the requested viewport alone.
 
-If `take_screenshot` returns before the page is fully painted, increase the wait to 4–5 s or scroll to the bottom and back to trigger lazy hydration (same script used in capture).
+If `take_screenshot` returns before the page is fully painted, increase the wait to 4-5 s or scroll to the bottom and back to trigger lazy hydration (same script used in capture).
 
 ## 3. Diff
 
@@ -131,10 +127,14 @@ For each site, append to `clones/<slug>/notes.md`:
   - <gap 2>
 ```
 
-Stop the playground server once the loop ends (see `references/playground-cli.md` §6).
+Stop the Studio site once the loop ends if it is no longer needed:
+
+```bash
+studio site stop --path ./clones/<slug>/studio-site
+```
 
 ## 8. When the `core/cover` white-text bug bites
 
 Symptom: hero text is invisible in the deployed screenshot because the light base color + `core/cover` combination forces white text. This is a known bug documented in `references/section-mapping.md` under "The brightness rule".
 
-**Fix in place** — update `patterns/section-<n>.php` to use the `core/group` variant of `cover-with-headline` from `section-mapping.md`. Redeploy (no restart needed — the mount is live). This should always be a class-B (template) fix, never a class-A (spec) fix.
+**Fix in place** — update `patterns/section-<n>.php` to use the `core/group` variant of `cover-with-headline` from `section-mapping.md`. Redeploy with `node scripts/studio-site.js deploy ./clones/<slug>`. This should always be a class-B (template) fix, never a class-A (spec) fix.

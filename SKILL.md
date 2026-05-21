@@ -16,7 +16,7 @@ The workflow builds on two proven patterns: a block-theme skeleton + section-map
 Stop and tell the user if any of these are missing.
 
 - **chrome-devtools MCP** (tools `mcp__chrome-devtools__*`) — required for source-page capture and for screenshotting the deployed clone.
-- **Node.js 18+ and `npx`** — required to run `@wp-playground/cli@latest`, which spins up a persistent local WordPress at `http://127.0.0.1:9400` to host the generated theme. Details in `references/playground-cli.md`. This replaces the previous wp-playground MCP path (which required a live browser tab + WebSocket bridge).
+- **WordPress Studio CLI (`studio`) and Node.js 18+** — required to create a persistent local WordPress site at `./clones/<slug>/studio-site/`, sync the generated theme, and report the local preview URL. Details in `references/studio-cli.md`.
 - **`curl`, `bash`, `python3`, `node`, `git`** on the host — for asset download, JSON validation, JS syntax checks, and worktree orchestration.
 - A working directory for the clone output (default: `./clones/<slug>/`).
 
@@ -68,7 +68,7 @@ Emit into `./clones/<slug>/theme/`:
 - `style.css` — minimal theme header; description ends with "Benchmark reference only — not for publication." when the source site is third-party.
 - `assets/fonts/` — self-hosted fonts **copied from `.capture/fonts/`** (downloaded in step 1/4a). Emit one `@font-face` block per `fonts/manifest.json` entry into `style.css`. Do **not** use `@import url('https://fonts.googleapis.com/...')` — `references/capture.md` step 4a replaces that path with local WOFF2 files.
 - `assets/` — **copy** every file from `./clones/<slug>/.capture/assets/` so the theme ships its own media.
-- `functions.php`, `templates/index.html`, `templates/front-page.html`, `parts/header.html`, `parts/footer.html` — initialized from `assets/block-theme-skeleton/`. `functions.php` enqueues `style.css` because Playground/Core may otherwise apply only `theme.json` global styles for block themes. Pattern slugs inside `front-page.html` are left as placeholders; step 6 wires them up.
+- `functions.php`, `templates/index.html`, `templates/front-page.html`, `parts/header.html`, `parts/footer.html` — initialized from `assets/block-theme-skeleton/`. `functions.php` enqueues `style.css` because Studio/Core may otherwise apply only `theme.json` global styles for block themes. Pattern slugs inside `front-page.html` are left as placeholders; step 6 wires them up.
 
 **Build gate (run now and after every subsequent mutation):**
 
@@ -153,11 +153,11 @@ This validator compares `specs/section-*.md` to `theme/patterns/section-*.php` a
 - no section pattern repaints a body-owned gradient
 - templates, parts, and patterns contain only WordPress block HTML comments (`<!-- wp:* -->`)
 
-If this gate fails, treat it as a class-B generation/template failure unless the spec itself is demonstrably wrong. Fix the spec or pattern and rerun the gate before launching Playground.
+If this gate fails, treat it as a class-B generation/template failure unless the spec itself is demonstrably wrong. Fix the spec or pattern and rerun the gate before launching Studio.
 
 ### 8. Deploy and visual QA diff
 
-Read `references/playground-cli.md` to launch the local WordPress and `references/visual-qa.md` for the screenshot + diff procedure. In short: write `clones/<slug>/blueprint.json`, run `npx @wp-playground/cli@latest server --port=9400 --mount=./clones/<slug>/theme:/wordpress/wp-content/themes/<slug> --blueprint=./clones/<slug>/blueprint.json` in the background, wait for `http://127.0.0.1:9400/` to respond, then chrome-devtools navigate + full-page screenshot at 1280×1400 and 390×844. Compare side-by-side with `.capture/desktop.png` and `.capture/mobile.png`.
+Read `references/studio-cli.md` to deploy the generated theme into a nested Studio site and `references/visual-qa.md` for the screenshot + diff procedure. In short: run `node scripts/studio-site.js deploy ./clones/<slug>`, read the local URL from `studio site status --path ./clones/<slug>/studio-site`, then chrome-devtools navigate + full-page screenshot at 1280×1400 and 390×844. Compare side-by-side with `.capture/desktop.png` and `.capture/mobile.png`.
 
 For each visible discrepancy, classify as **A** (spec was wrong → re-extract that section), **B** (template dropped information → fix `section-mapping.md` and regenerate), or **C** (WP renders differently than expected → record in `notes.md` as a known gap).
 
@@ -177,7 +177,8 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 
 - `scripts/extract.js` — full-page capture extractor. Semantic-landmark preflight (`<section>`, `<header>`, `<footer>`, `<nav>`, `<main>`, `<article>`, `[role="region"]` filtered to visible + height ≥ 200 px); falls through to Y-band clustering only when fewer than 3 semantic landmarks are found. Largest-visible-text display sampler, framework-default button blacklist, CORS-tainted palette fallback. Pass the body as the `function` argument to `evaluate_script`.
 - `scripts/extract-section.js` — per-section deep extractor. Walks a 40-property `getComputedStyle()` tree rooted at the section wrapper.
-- `scripts/validate-artifacts.js` — clone artifact validator. Runs before Playground to compare specs against generated patterns and catch skeleton drift, remote assets, decorative comments, unresolved placeholders, and body-gradient repainting.
+- `scripts/validate-artifacts.js` — clone artifact validator. Runs before Studio deploy to compare specs against generated patterns and catch skeleton drift, remote assets, decorative comments, unresolved placeholders, and body-gradient repainting.
+- `scripts/studio-site.js` — deploy helper that creates or starts `clones/<slug>/studio-site/`, syncs the generated theme, activates it, sets the static front page, and prints Studio site status.
 - `scripts/download-assets.js` — downloads `analysis.json.images[]` and `analysis.json.media.videos[].poster` into deterministic `assets/img-NN.ext` files with a manifest.
 - `scripts/benchmark-wix-sites.js` — batch capture/extraction sweep for public site targets. Given a `sites.json` list, writes desktop/mobile screenshots, top-viewport motion frames, `analysis.json`, per-site summaries, and an aggregate readiness/risk report.
 - `references/animation-capture.md` — motion capture and reproduction rules for CSS transitions/keyframes, marquees, parallax, carousels, Lottie/video fallbacks, and reduced-motion behavior.
@@ -187,11 +188,11 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 - `references/section-mapping.md` — block-markup templates per interaction model, with placeholder variables.
 - `references/theme-tokens.md` — `analysis.tokens` → `theme.json`, brightness-based `core/cover` vs `core/group` rule, commercial-to-free font substitution table.
 - `references/parallel-dispatch.md` — worktree setup, builder agent prompt template, merge procedure, build-gate commands.
-- `references/playground-cli.md` — launch a persistent local WordPress via `@wp-playground/cli` (blueprint, mount, persistence, teardown).
-- `references/visual-qa.md` — deploy via the CLI playground, screenshot at 1280×1400 + 390×844, side-by-side diff, 3-iteration budget.
+- `references/studio-cli.md` — create or reuse a persistent local WordPress site via Studio CLI, run WP-CLI, and optionally publish a preview site.
+- `references/visual-qa.md` — deploy via Studio CLI, screenshot at 1280×1400 + 390×844, side-by-side diff, 3-iteration budget.
 - `assets/block-theme-skeleton/` — minimal block theme to copy before filling in.
 - `assets/block-theme-skeleton/functions.php` — enqueues the generated `style.css` fallback stylesheet for block-theme clones.
-- `assets/blueprint-template.json` — starting blueprint for `@wp-playground/cli --blueprint=` (activates the theme, wires front-page).
+- `assets/blueprint-template.json` — Studio-compatible Blueprint setup for the static front page and site title.
 
 ## What NOT to do
 
@@ -202,6 +203,6 @@ Lessons from previous benchmark failures — each cost hours of rework.
 - **Do not reproduce every section type as a generic 3-column layout.** A logo strip is not a feature grid. A media-text is not a columns block. A testimonial is not a cover. Use the right template per interaction model from `references/section-mapping.md`.
 - **Do not use `core/cover` when the base brightness ≥ 200.** The cover block forces white inner text on an overlay and produces invisible content on light backgrounds. Use `core/group` with explicit contrast text color. Rule lives in `references/theme-tokens.md` and `references/section-mapping.md`.
 - **Do not dispatch a builder without the 10-item pre-dispatch checklist passing.** Partial specs produce patterns that need a second pass and waste the worktree.
-- **Do not skip the build gate.** It is three commands and catches JSON typos, JS syntax errors, and invalid `theme.json` schema versions before they reach wp-playground.
+- **Do not skip the build gate.** It is three commands and catches JSON typos, JS syntax errors, and invalid `theme.json` schema versions before they reach Studio.
 - **Do not skip the visual QA diff.** A theme that activates cleanly can still look nothing like its source. The diff catches this on site #1.
 - **Do not inline CDN URLs in the generated theme.** Signed query strings and geoblocked hosts break the theme in deploys. Always `get_theme_file_uri('assets/...')`.
