@@ -1,13 +1,13 @@
 ---
-name: wp-clone-to-block-theme
-description: Clone a public website into a WordPress block theme that reproduces layout, imagery, palette, typography, and real section content. Captures the live page via chrome-devtools MCP, downloads all referenced images, writes per-section spec files from computed styles, and dispatches parallel builder agents in git worktrees to emit one WP block pattern per section. Handles Wix / Webflow / Squarespace / Shopify builders too — the extractor falls back to Y-band clustering when the source page has no semantic section markup. Use when the user asks to "clone this site to WordPress", "convert to block theme", "rebuild this page as a block theme", "pixel-perfect block theme clone", or provides any public URL.
+name: liberate-it
+description: Liberate It clones a public website into a WordPress block theme that reproduces layout, imagery, palette, typography, motion cues, and real section content. It captures the live page via chrome-devtools MCP, downloads referenced assets, writes per-section spec files from computed styles, and dispatches parallel builder agents in git worktrees to emit one WP block pattern per section. Handles Wix, Webflow, Squarespace, Shopify, and other builder sites too; the extractor falls back to Y-band clustering when the source page has no semantic section markup. Use when the user asks to "clone this site to WordPress", "convert to block theme", "rebuild this page as a block theme", "pixel-perfect block theme clone", "liberate this site", or provides any public URL that should become a WordPress site.
 ---
 
-# Clone a website into a WordPress block theme
+# Liberate It: Clone a Website into a WordPress Block Theme
 
 ## Overview
 
-This skill turns any public URL into a WordPress block theme that reproduces the source page's layout, imagery, palette, typography, motion cues, and real content — not a structural scaffold. Every generated pattern is backed by a per-section spec file extracted from computed styles with local asset paths. No placeholder text. No generic 3-column filler. If the captured section is a 10-image gallery, the generated pattern is a 10-image gallery.
+Liberate It turns any public URL into a WordPress block theme that reproduces the source page's layout, imagery, palette, typography, motion cues, and real content — not a structural scaffold. Every generated pattern is backed by a per-section spec file extracted from computed styles with local asset paths. No placeholder text. No generic 3-column filler. If the captured section is a 10-image gallery, the generated pattern is a 10-image gallery.
 
 The workflow builds on two proven patterns: a block-theme skeleton + section-mapping templates + brightness-based `core/cover` rule + CORS-tainted palette fallback (all bundled in this skill), and the Next.js `ai-website-cloner-template-master/.claude/skills/clone-website` conventions for exhaustive `getComputedStyle()` extraction, interaction-model gating, spec-file contracts, **parallel dispatch in git worktrees**, **foundation-first sequencing**, **build gate at every step**, and **pre-dispatch checklist**.
 

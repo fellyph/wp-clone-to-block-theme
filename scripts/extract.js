@@ -1,4 +1,4 @@
-// Canonical full-page extractor for the wp-clone-to-block-theme skill.
+// Canonical full-page extractor for the Liberate It skill.
 // Pass this function body to mcp__chrome-devtools__evaluate_script as the
 // `function` argument.
 //

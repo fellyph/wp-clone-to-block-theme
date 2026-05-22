@@ -240,12 +240,12 @@ function deploy(options) {
 
   syncTheme(themeSource, themeTarget, options.dryRun);
 
-  runStudio(['--path', sitePath, 'wp', 'theme', 'activate', themeSlug], options.dryRun);
+  runStudio(['wp', '--path', sitePath, 'theme', 'activate', themeSlug], options.dryRun);
   runStudio(
     [
+      'wp',
       '--path',
       sitePath,
-      'wp',
       'eval',
       [
         "$front = get_page_by_path('front');",

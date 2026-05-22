@@ -81,9 +81,9 @@ Do not commit `clones/<slug>/studio-site/`; it contains a full WordPress install
 Run WP-CLI through Studio:
 
 ```bash
-studio --path ./clones/<slug>/studio-site wp theme status <slug>
-studio --path ./clones/<slug>/studio-site wp theme activate <slug>
-studio --path ./clones/<slug>/studio-site wp option get siteurl
+studio wp --path ./clones/<slug>/studio-site theme status <slug>
+studio wp --path ./clones/<slug>/studio-site theme activate <slug>
+studio wp --path ./clones/<slug>/studio-site option get siteurl
 ```
 
 The deploy helper uses this path-aware form to avoid accidentally running against the repo root.
@@ -117,7 +117,7 @@ Use `studio preview list` to find existing preview hosts before updating.
 | --- | --- | --- |
 | `studio: command not found` | Studio CLI is not installed or not on `PATH` | Enable the CLI in Studio Settings or install the standalone CLI. |
 | `The specified directory is not added to Studio` | The command points at the clone root instead of the Studio site root | Use `--path ./clones/<slug>/studio-site`. |
-| Theme shows a default bundled theme | Theme sync or activation did not run | Re-run `node scripts/studio-site.js deploy ./clones/<slug>` and check `studio --path ... wp theme status <slug>`. |
+| Theme shows a default bundled theme | Theme sync or activation did not run | Re-run `node scripts/studio-site.js deploy ./clones/<slug>` and check `studio wp --path ... theme status <slug>`. |
 | Edits do not appear in the browser | Source theme changed after the last sync | Re-run the deploy helper, then reload the Studio site URL. |
 | Assets 404 in the rendered page | Theme asset paths are wrong or sync is stale | Run the artifact validator, redeploy, and verify files under `studio-site/wp-content/themes/<slug>/assets/`. |
 | Preview create/update fails | Not authenticated or preview host mismatch | Run `studio auth status`; use `studio preview list`; pass `--overwrite` only when intentionally updating from another directory. |

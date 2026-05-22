@@ -39,7 +39,7 @@ function fetchBuffer(url, redirects = 0) {
       url,
       {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; wp-clone-to-block-theme)',
+          'User-Agent': 'Mozilla/5.0 (compatible; liberate-it)',
           Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         },
       },
