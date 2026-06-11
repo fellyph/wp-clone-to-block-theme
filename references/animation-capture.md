@@ -10,6 +10,8 @@ Use these artifacts:
 - `analysis.json.sections[*].motion` — per-section motion signals and samples.
 - `analysis.json.media.videos` — visible video sources/posters for static `core/cover` fallbacks.
 - `.capture/sections/<n>.json.tree[*].motion` — node-level animation/transition details from `scripts/extract-section.js`.
+- `.capture/motion/manifest.json` — animation census + scroll-step↔frame map from `scripts/record-scroll.js` (or the MCP screenshot-burst fallback in `references/capture.md` §2).
+- `.capture/motion/settled/step-NN.png` — per-step settled frames from the scroll recording. These are the per-section visual reference and supersede the `motion-start`/`motion-end` estimates when present.
 - `motion-start.png` and `motion-end.png` from the benchmark runner — initial viewport frames used to estimate visible animation delta.
 - `desktop.png` and `mobile.png` — final settled state.
 
