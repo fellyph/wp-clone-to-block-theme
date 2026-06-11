@@ -36,17 +36,20 @@ The generated theme remains at `./clones/<slug>/theme/`. The deploy helper copie
 
 Use the local URL printed by `studio site status`; do not assume a fixed port. Because the site is a real HTTP URL, chrome-devtools can screenshot it directly.
 
+When the theme carries reveal animations (the skeleton's `reveal.js` system, used whenever the capture found motion), the deployed clone has the same screenshot hazard the source did: `.reveal` elements sit at `opacity: 0` until scrolled into view. Run the stepped scroll first so every one-shot reveal has fired, then screenshot — otherwise the full-page PNG shows blank gaps that aren't real defects.
+
 ```
 mcp__chrome-devtools__new_page { url: "<studio-local-url>" }
 mcp__chrome-devtools__resize_page { width: 1280, height: 1400 }
-# Wait ~2s for WP to hydrate fonts + images:
-mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2000)); return document.title; }" }
+# Hydrate fonts + images, then step-scroll to fire all reveals, then return to top:
+mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2000)); const step = Math.round(window.innerHeight * 0.85); for (let y = 0; y < document.body.scrollHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 450)); } window.scrollTo(0, 0); await new Promise(r => setTimeout(r, 1400)); return document.title; }" }
 mcp__chrome-devtools__take_screenshot { fullPage: true, filePath: "clones/<slug>/wp-result-desktop.png" }
 ```
 
-For mobile:
+For mobile (reveals are already fired for this tab; a short settle is enough):
 ```
 mcp__chrome-devtools__resize_page { width: 390, height: 844 }
+mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 1000)); return true; }" }
 mcp__chrome-devtools__take_screenshot { fullPage: true, filePath: "clones/<slug>/wp-result-mobile.png" }
 ```
 
