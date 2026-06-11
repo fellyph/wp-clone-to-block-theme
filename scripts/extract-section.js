@@ -7,6 +7,11 @@
 // section's Y band, with computed styles, verbatim text, image URLs, and a
 // classification hint (heading / paragraph / button / image / container).
 //
+// The function is async: it waits up to 3s for finite animations to settle
+// before reading styles, so captured values reflect the design at rest.
+// Scroll the band into view BEFORE calling (see references/capture.md §5) so
+// IntersectionObserver-gated reveals have fired.
+//
 // The output is one of the inputs to references/spec-files.md — it contains
 // everything the pattern generator needs to write real block markup for this
 // section without re-running capture.
@@ -17,10 +22,26 @@
 //     args: ["1187", "628"]   // top, height
 //   })
 
-(sectionTop, sectionHeight) => {
+async (sectionTop, sectionHeight) => {
   const top = parseFloat(sectionTop);
   const height = parseFloat(sectionHeight);
   const bottom = top + height;
+
+  // Let in-flight animations finish before reading computed styles, otherwise
+  // a mid-tween capture records opacity/transform values the design never
+  // shows at rest. Infinite animations (marquees, spinners) are excluded —
+  // they never settle and are reported in the node-level motion fields instead.
+  {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 3000) {
+      const running = document.getAnimations().filter(
+        (a) => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity
+      );
+      if (running.length === 0) break;
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
 
   const PROPS = [
     'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'letterSpacing', 'color',
@@ -139,7 +160,10 @@
     return { error: 'no visible elements in band', top, height };
   }
 
-  // Find the tightest wrapper: the smallest-area element that contains every inBand element
+  // Find the tightest wrapper: the smallest-area element that contains every inBand element.
+  // Prefer wrappers spanning ≥60% of the viewport width — page builders (Wix) nest a narrow
+  // column inside the section that also "contains the band vertically", and picking it would
+  // silently drop the section's other columns from the tree.
   const tightest = (() => {
     const candidates = inBand.filter((el) => {
       const r = el.getBoundingClientRect();
@@ -148,12 +172,14 @@
       // must contain the band vertically
       return elTop <= top + 5 && elBot >= bottom - 5 && r.width > 200;
     });
-    candidates.sort((a, b) => {
+    const byArea = (a, b) => {
       const ra = a.getBoundingClientRect();
       const rb = b.getBoundingClientRect();
       return ra.width * ra.height - rb.width * rb.height;
-    });
-    return candidates[0] || inBand[0];
+    };
+    const wide = candidates.filter((el) => el.getBoundingClientRect().width >= window.innerWidth * 0.6);
+    (wide.length ? wide : candidates).sort(byArea);
+    return (wide.length ? wide : candidates)[0] || inBand[0];
   })();
 
   // Classify an element by role
@@ -177,9 +203,25 @@
     return 'container';
   };
 
-  // Walk the tree, but cap depth and children to keep the payload reasonable
+  // Walk the tree, but cap depth and children to keep the payload reasonable.
+  // Single-child passthrough wrappers (builder DOMs nest 6+ deep before any
+  // content) are collapsed first so they don't consume the depth budget.
   const walk = (el, depth) => {
     if (depth > 5) return null;
+    // Skip through chains of contentless single-child wrappers
+    let hops = 0;
+    while (hops < 8 && el.children.length === 1 && el.tagName !== 'A' && el.tagName !== 'BUTTON') {
+      const hasOwnContent = Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.nodeValue.trim().length > 0);
+      if (hasOwnContent || el.tagName === 'IMG') break;
+      const cs = getComputedStyle(el);
+      // keep wrappers that carry visual meaning (bg, border, shadow)
+      if ((cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)') || (cs.backgroundImage && cs.backgroundImage !== 'none') || (cs.boxShadow && cs.boxShadow !== 'none')) break;
+      const only = el.children[0];
+      const or = only.getBoundingClientRect();
+      if (or.width <= 10) break;
+      el = only;
+      hops++;
+    }
     const r = el.getBoundingClientRect();
     const role = classify(el);
     const ownText = Array.from(el.childNodes)
@@ -246,12 +288,16 @@
       if (label) node.label = label;
     }
 
-    // Only descend into visible children that actually contain content
+    // Only descend into visible children that actually contain content.
+    // Zero-height wrappers that still have children are kept — virtualized
+    // galleries (Wix pro-gallery) report 0-height link wrappers whose
+    // descendants are the real cards.
     const children = Array.from(el.children)
       .filter((c) => {
-        if (!isVisible(c)) return false;
         const cr = c.getBoundingClientRect();
-        return cr.width > 10 && cr.height > 10;
+        if (cr.width <= 10) return false;
+        if (cr.height <= 10) return c.children.length > 0;
+        return isVisible(c);
       })
       .slice(0, 30);
 
