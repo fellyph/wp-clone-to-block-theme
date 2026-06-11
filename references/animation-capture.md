@@ -24,7 +24,7 @@ Classify every moving section as one of these:
 | `none` | n/a | Static blocks only. |
 | `css-transition` | yes | Emit hover/focus transition classes in `style.css`. |
 | `css-keyframes` | yes, when simple | Copy timing/direction/easing into theme-scoped keyframes; use captured duration. |
-| `entry-reveal` | yes | Use opacity + translate transforms with staggered delays. Keep final state visible if JS is absent. |
+| `entry-reveal` | yes | Use the skeleton's reveal system: tag the block with `reveal` plus a variant class (`reveal-fade` = opacity only, `reveal-slide-up` = opacity + translateY, `reveal-rise` = opacity + clip reveal), replayed once-per-element by `assets/js/reveal.js`; stagger with delays where the source does. The hidden state is `html.js`- and `prefers-reduced-motion`-gated in the skeleton `style.css`, so the final state stays visible if JS is absent. |
 | `marquee` | yes | CSS-only horizontal keyframes; pause on hover; honor reduced motion. |
 | `carousel` | partial | Render all images as a responsive grid unless the source carousel state is essential; add an explicit comment if autoplay is dropped. |
 | `parallax` | partial | Retain static background/image placement; use `background-attachment: fixed` only if the source effect is simple and not mobile-critical. |

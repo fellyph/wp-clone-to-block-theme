@@ -12,3 +12,26 @@ License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: theme-slug
 */
+
+/* One-shot scroll reveals — paired with assets/js/reveal.js.
+   The hidden state is gated on html.js (set in wp_head) so content stays
+   visible without JavaScript, and on prefers-reduced-motion so users who
+   opt out of motion see everything immediately. Duration: tune REVEAL_DURATION
+   to the captured animation timing. */
+@media (prefers-reduced-motion: no-preference) {
+	html.js .reveal {
+		opacity: 0;
+		transition: opacity 1.2s ease, transform 1.2s ease, clip-path 1.2s ease;
+	}
+	html.js .reveal.reveal-slide-up {
+		transform: translateY(32px);
+	}
+	html.js .reveal.reveal-rise {
+		clip-path: inset(0 0 18% 0);
+	}
+	html.js .reveal.is-revealed {
+		opacity: 1;
+		transform: none;
+		clip-path: inset(0 0 0 0);
+	}
+}
