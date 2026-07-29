@@ -31,17 +31,25 @@ async (sectionTop, sectionHeight) => {
   // a mid-tween capture records opacity/transform values the design never
   // shows at rest. Infinite animations (marquees, spinners) are excluded —
   // they never settle and are reported in the node-level motion fields instead.
-  {
-    const t0 = Date.now();
-    while (Date.now() - t0 < 3000) {
-      const running = document.getAnimations().filter(
-        (a) => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity
-      );
-      if (running.length === 0) break;
-      await new Promise((r) => requestAnimationFrame(r));
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  //
+  // The poll uses setTimeout, never requestAnimationFrame: rAF is frozen
+  // outright in a backgrounded tab, so an rAF-driven loop never reaches its
+  // own Date.now() deadline and hangs evaluate_script forever. setTimeout is
+  // throttled when hidden but always fires. Promise.race is the backstop.
+  await Promise.race([
+    (async () => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 3000) {
+        const running = document.getAnimations().filter(
+          (a) => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity
+        );
+        if (running.length === 0) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    })(),
+    new Promise((r) => setTimeout(r, 4000)),
+  ]);
 
   const PROPS = [
     'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'letterSpacing', 'color',
@@ -206,8 +214,30 @@ async (sectionTop, sectionHeight) => {
   // Walk the tree, but cap depth and children to keep the payload reasonable.
   // Single-child passthrough wrappers (builder DOMs nest 6+ deep before any
   // content) are collapsed first so they don't consume the depth budget.
-  const walk = (el, depth) => {
-    if (depth > 5) return null;
+  //
+  // The budget counts *content* levels, not DOM levels: a container that holds
+  // no text, image or background of its own is pure layout scaffolding and is
+  // free to descend through. Without this, a builder's multi-column grid — whose
+  // columns are multi-child, so the single-child collapse above cannot help —
+  // spends the whole budget on empty divs and the section extracts as blank.
+  // ABSOLUTE_DEPTH is the runaway guard.
+  const CONTENT_DEPTH = 5;
+  const ABSOLUTE_DEPTH = 14;
+  const isScaffolding = (el) => {
+    if (el.tagName === 'IMG' || el.tagName === 'SVG' || el.tagName === 'A' || el.tagName === 'BUTTON') return false;
+    const hasOwnText = Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.nodeValue.trim().length > 0);
+    if (hasOwnText) return false;
+    const cs = getComputedStyle(el);
+    if (cs.backgroundImage && cs.backgroundImage !== 'none') return false;
+    if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') return false;
+    if (cs.borderTopWidth !== '0px' || cs.borderLeftWidth !== '0px') return false;
+    if (cs.boxShadow && cs.boxShadow !== 'none') return false;
+    return true;
+  };
+
+  const walk = (el, depth, absDepth) => {
+    absDepth = absDepth === undefined ? depth : absDepth;
+    if (depth > CONTENT_DEPTH || absDepth > ABSOLUTE_DEPTH) return null;
     // Skip through chains of contentless single-child wrappers
     let hops = 0;
     while (hops < 8 && el.children.length === 1 && el.tagName !== 'A' && el.tagName !== 'BUTTON') {
@@ -302,7 +332,9 @@ async (sectionTop, sectionHeight) => {
       .slice(0, 30);
 
     if (children.length > 0) {
-      node.children = children.map((c) => walk(c, depth + 1)).filter(Boolean);
+      node.children = children
+        .map((c) => walk(c, isScaffolding(c) ? depth : depth + 1, absDepth + 1))
+        .filter(Boolean);
     }
 
     return node;

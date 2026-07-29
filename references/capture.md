@@ -22,10 +22,12 @@ mcp__chrome-devtools__resize_page { width: 1440, height: 900 }
 Many modern sites are JS-rendered, lazy-load heavily, and gate animations behind IntersectionObserver — a section's fade-in only fires when it scrolls into view. Stabilize with a combined script that waits, walks the page in viewport-sized steps to hydrate lazy sections **and let each step's animations settle**, then scrolls back to the top. A single jump to the bottom is not enough for Wix portfolio pages that reveal each project only when its band enters the viewport:
 
 ```
-mcp__chrome-devtools__evaluate_script { function: "async () => { const settle = async () => { const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => requestAnimationFrame(r)); } await new Promise(r => setTimeout(r, 300)); }; await new Promise(r => setTimeout(r, 2500)); let previousHeight = 0; let h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); const step = Math.max(420, Math.floor(window.innerHeight * 0.72)); for (let pass = 0; pass < 2; pass++) { for (let y = 0; y <= h + window.innerHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 220)); await settle(); h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); } if (h === previousHeight) break; previousHeight = h; } window.scrollTo(0, 0); await settle(); return { title: document.title, h, images: Array.from(document.images).filter(img => img.complete && img.naturalWidth > 0).length }; }" }
+mcp__chrome-devtools__evaluate_script { function: "async () => { const settle = async () => { const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => setTimeout(r, 100)); } await new Promise(r => setTimeout(r, 300)); }; await new Promise(r => setTimeout(r, 2500)); let previousHeight = 0; let h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); const step = Math.max(420, Math.floor(window.innerHeight * 0.72)); for (let pass = 0; pass < 2; pass++) { for (let y = 0; y <= h + window.innerHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 220)); await settle(); h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); } if (h === previousHeight) break; previousHeight = h; } window.scrollTo(0, 0); await settle(); return { title: document.title, h, images: Array.from(document.images).filter(img => img.complete && img.naturalWidth > 0).length }; }" }
 ```
 
 The `iterations !== Infinity` filter matters: marquees and looping spinners never finish, and without it the settle loop would always hit the timeout.
+
+The poll waits on `setTimeout`, never `requestAnimationFrame`. Chrome freezes rAF entirely in a backgrounded tab, so an rAF-driven loop never reaches its own `Date.now()` deadline and `evaluate_script` hangs until the MCP call times out. `setTimeout` is throttled when hidden but always fires. Keep this identical in every copy of the settle snippet (`scripts/extract-section.js`, `scripts/record-scroll.js`, and both snippets in this file).
 
 If the settled screenshot shows content that `analysis.json.images[]` missed, or if mid-page crops are blank where section headings/assets are known to exist, rerun extraction after this stepped-scroll pass and replace `analysis.json` before downloading assets. Treat the screenshot as the authority: missing lazy image inventory is a capture failure, not a sparse design.
 
@@ -43,14 +45,24 @@ Animated sites — fade-in heroes, scroll-triggered reveals, parallax, carousels
 node <skill-path>/scripts/record-scroll.js "<url>" "./clones/<slug>/.capture/motion" --width 1440 --height 900
 ```
 
-One-time dependencies (install in the clone workspace, not the skill directory): `npm i playwright && npx playwright install chromium`, plus `ffmpeg` on the PATH (`brew install ffmpeg`). The script:
+One-time dependency (install in the clone workspace, not the skill directory): `npm i playwright && npx playwright install chromium`. **ffmpeg is not required** — it is only used by the optional `--keyframes` sweep. The script:
 
-- records the viewport to `motion/scroll.webm` while smooth-scrolling top→bottom in steps, waiting at each step for finite animations to settle;
-- takes an **animation census** before scrolling — `document.getAnimations()` plus reveal-library markers (`[data-aos]`, `.wow`, `[data-scroll]`, Wix motion attributes) — saved into the manifest;
-- extracts `motion/frames/` (~2 fps keyframes, useful for understanding how the page animates) and `motion/settled/step-NN.png` (one frame per scroll step at its settled timestamp — the per-section visual references);
-- writes `motion/manifest.json` mapping scroll positions → frames, with the census and a `hasMotion` flag.
+- dismisses any cookie/consent/promo banner first. The recorder is a *separate* headless browser from the MCP tab, so the banner you dismissed in §1 is still present here; left alone it would appear in every settled frame while `desktop.png` shows none. Override with `--dismiss-selector <css>`, or keep the banner deliberately with `--keep-banner`;
+- takes an **animation census** before scrolling — `document.getAnimations()` plus reveal-library markers (`[data-aos]`, `.wow`, `[data-scroll]`, `[data-framer-appear-id]`, `[data-w-id]`, Wix motion attributes) — saved into the manifest;
+- smooth-scrolls top→bottom in ~85%-viewport steps, waits at each step for finite animations to settle, then writes `motion/settled/step-NN.png` **directly from `page.screenshot()`** — pixel-exact at the moment the settle poll returned, not re-seeked out of a lossy video. These are the per-section visual references;
+- re-measures page height at every step, so lazy-growing builder pages are followed to the real bottom rather than the height read once at load. Bounded by `--max-steps` (default 40) and `--budget-ms` (default 180000); whichever limit stops the pass is recorded in `manifest.notes`;
+- records `motion/scroll.webm` alongside as a human-reviewable artifact. `--keyframes` additionally dumps `motion/frames/frame_NNNN.png` at `--fps` (needs ffmpeg) — off by default, since nothing downstream reads them;
+- writes `motion/manifest.json`: per-step `scrollY`, `viewportBand`, `pageHeightAtStep`, `settled`, `settledFrame`, plus the census, `bannerDismissal`, `hasMotion`, and `notes`.
 
-Exit codes: `0` = full success; `3` = video + manifest saved but ffmpeg missing, frames not extracted (treat as partial success and either install ffmpeg and re-extract, or fall back to the burst below for stills); `2` = Playwright missing → use the fallback.
+Exit codes: `0` = success; `1` = fatal; `2` = Playwright missing → use the fallback below; `4` = no scroll steps recorded, the capture produced nothing usable (check `manifest.notes` for the navigation error).
+
+Verify the recording before moving on — this is one command and it gates every expensive step after it:
+
+```bash
+node <skill-path>/scripts/check-motion-manifest.js "./clones/<slug>/.capture/motion"
+```
+
+It asserts monotonic `scrollY`, non-shrinking `pageHeightAtStep`, that the pass reached the bottom, that one settled frame exists per step at exactly the viewport size, and warns when more than 30% of steps never settled.
 
 **Fallback path — screenshot burst via chrome-devtools MCP (no extra dependencies):**
 
@@ -251,7 +263,7 @@ For each section in `analysis.json.sections[]`, run `scripts/extract-section.js`
 **Settle before extracting.** The extractor reads computed styles — if a reveal animation is mid-tween, you capture `opacity: 0.4` and a half-translated `transform` instead of the design's final values. Before each call, scroll the band into view and wait for animations to finish (the extractor itself also re-runs this settle internally, but pre-scrolling fires the section's IntersectionObserver so there is something to settle):
 
 ```
-mcp__chrome-devtools__evaluate_script { function: "async () => { window.scrollTo(0, <top> - 100); await new Promise(r => setTimeout(r, 400)); const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => requestAnimationFrame(r)); } await new Promise(r => setTimeout(r, 300)); return window.scrollY; }" }
+mcp__chrome-devtools__evaluate_script { function: "async () => { window.scrollTo(0, <top> - 100); await new Promise(r => setTimeout(r, 400)); const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => setTimeout(r, 100)); } await new Promise(r => setTimeout(r, 300)); return window.scrollY; }" }
 ```
 
 Then run the extractor:

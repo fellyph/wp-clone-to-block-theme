@@ -5,8 +5,14 @@
  *
  * Variants are pure CSS: reveal-fade (opacity only), reveal-slide-up
  * (opacity + translateY), reveal-rise (opacity + clip reveal). See style.css.
+ *
+ * The first statement disarms the watchdog in functions.php, which otherwise
+ * strips `html.js` after 2.5s and un-hides everything. It must run before any
+ * early return, so that a page with zero `.reveal` elements still checks in.
  */
 (function () {
+	document.documentElement.classList.add('reveal-ready');
+
 	var els = document.querySelectorAll('.reveal');
 	if (!els.length) return;
 

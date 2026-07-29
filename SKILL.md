@@ -22,7 +22,7 @@ Stop and tell the user if any of these are missing.
 
 Recommended but optional — the workflow degrades gracefully without them:
 
-- **Playwright + ffmpeg** — `npm i playwright && npx playwright install chromium` (in the clone workspace) and `brew install ffmpeg`. Powers `scripts/record-scroll.js`, the scroll-video recorder that captures animated sites in their settled state. Without them, the capture step falls back to an MCP screenshot burst (same artifacts, no video). See `references/capture.md` §2.
+- **Playwright** — `npm i playwright && npx playwright install chromium` (in the clone workspace). Powers `scripts/record-scroll.js`, the scroll recorder that captures animated sites in their settled state. Without it, the capture step falls back to an MCP screenshot burst (same artifacts, no video). See `references/capture.md` §2. **ffmpeg is not required**; it is only used by the optional `--keyframes` sweep.
 - **wp-blockmarkup-mcp** (`claude mcp add wp-blockmarkup -- npx wp-blockmarkup-mcp`, Node 20+) — gives builders a `validate_markup` tool that catches block-recovery bugs (malformed delimiters, wrong class-name order, preset-slug casing) before they reach WordPress. Without it, builders run the `npx -y -p wp-blockmarkup-mcp wp-blocks validate` CLI or follow the manual checklist in `references/block-markup-quality.md`.
 
 ## Workflow
@@ -160,6 +160,17 @@ This validator compares `specs/section-*.md` to `theme/patterns/section-*.php` a
 - no unresolved `{{placeholder}}` strings remain
 - no section pattern repaints a body-owned gradient
 - templates, parts, and patterns contain only WordPress block HTML comments (`<!-- wp:* -->`)
+- the interaction-model list has not drifted between `references/spec-files.md` and the validator
+
+It also runs the **motion checks**, which are advisory by default and become errors with `--strict-motion`:
+
+- every spec has a valid `**Motion class:**`; when it is not `none`, `**Settled frame:**` and `**Reveal classes:**` are filled in (pre-dispatch checklist item 8, previously eyeballed only)
+- a spec's settled-frame path actually exists on disk
+- reveal classes the spec declares reach the pattern's markup, and use only the variants the skeleton CSS defines (`reveal-fade` / `reveal-slide-up` / `reveal-rise`) — an invented variant is content nothing ever un-hides
+- if any pattern uses the reveal system, the theme ships `assets/js/reveal.js`, the reveal CSS, the `html.js` bootstrap, and the `reveal-ready` watchdog
+- `.capture/motion/manifest.json` with `hasMotion: true` has steps and settled frames on disk
+
+Run with `--strict-motion` once a clone has passed cleanly; leave it off for clones captured before the motion pipeline existed.
 
 If this gate fails, treat it as a class-B generation/template failure unless the spec itself is demonstrably wrong. Fix the spec or pattern and rerun the gate before launching Studio.
 
@@ -185,7 +196,8 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 
 - `scripts/extract.js` — full-page capture extractor. Semantic-landmark preflight (`<section>`, `<header>`, `<footer>`, `<nav>`, `<main>`, `<article>`, `[role="region"]` filtered to visible + height ≥ 200 px); falls through to Y-band clustering only when fewer than 3 semantic landmarks are found. Largest-visible-text display sampler, framework-default button blacklist, CORS-tainted palette fallback. Pass the body as the `function` argument to `evaluate_script`.
 - `scripts/extract-section.js` — per-section deep extractor. Walks a 40-property `getComputedStyle()` tree rooted at the section wrapper, after waiting for finite animations to settle.
-- `scripts/record-scroll.js` — Playwright scroll recorder. Records `scroll.webm` while stepping top→bottom with animation settlement, runs an animation census, extracts settled frames + keyframes via ffmpeg, writes `motion/manifest.json`. Exit 2 = Playwright missing (use MCP fallback), exit 3 = ffmpeg missing (video saved, no frames).
+- `scripts/record-scroll.js` — Playwright scroll recorder. Dismisses cookie/consent banners, runs an animation census, steps top→bottom with animation settlement re-measuring page height each step, screenshots `settled/step-NN.png` directly at each settled step, records `scroll.webm` alongside, writes `motion/manifest.json`. Exit 2 = Playwright missing (use MCP fallback), exit 4 = no steps recorded (capture unusable). ffmpeg is only needed for the optional `--keyframes` sweep.
+- `scripts/check-motion-manifest.js` — Tier-1 gate for a scroll recording: monotonic `scrollY`, non-shrinking `pageHeightAtStep`, pass reached the bottom, one settled frame per step at exactly the viewport size. Run it before spending time on specs.
 - `scripts/validate-artifacts.js` — clone artifact validator. Runs before Studio deploy to compare specs against generated patterns and catch skeleton drift, remote assets, decorative comments, unresolved placeholders, and body-gradient repainting.
 - `scripts/studio-site.js` — deploy helper that creates or starts `clones/<slug>/studio-site/`, syncs the generated theme, activates it, sets the static front page, and prints Studio site status.
 - `scripts/download-assets.js` — downloads `analysis.json.images[]` and `analysis.json.media.videos[].poster` into deterministic `assets/img-NN.ext` files with a manifest.
@@ -193,6 +205,7 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 - `references/animation-capture.md` — motion capture and reproduction rules for CSS transitions/keyframes, entry reveals, marquees, parallax, carousels, Lottie/video fallbacks, and reduced-motion behavior.
 - `references/block-markup-quality.md` — block markup validity rules (delimiters, class order, preset slugs, nesting) and the three-tier validation gate (wp-blockmarkup MCP, `wp-blocks validate` CLI, manual checklist) builders run before committing.
 - `references/capture.md` — capture procedure, asset download loop, per-section extraction loop, font self-host download.
+- `references/pipeline-test.md` — how to prove the pipeline still works after changing a script or the skeleton: five gated tiers with exact commands, plus how to compare two runs of the same URL.
 - `references/design-brief.md` — the `design.md` template and filling rules for step 1b (10-section design system contract).
 - `references/spec-files.md` — spec file template and how to fill it.
 - `references/section-mapping.md` — block-markup templates per interaction model, with placeholder variables.
@@ -201,8 +214,8 @@ For third-party sites: the generated theme's `style.css` header must say "Benchm
 - `references/studio-cli.md` — create or reuse a persistent local WordPress site via Studio CLI, run WP-CLI, and optionally publish a preview site.
 - `references/visual-qa.md` — deploy via Studio CLI, screenshot at 1280×1400 + 390×844, side-by-side diff, 3-iteration budget.
 - `assets/block-theme-skeleton/` — minimal block theme to copy before filling in.
-- `assets/block-theme-skeleton/functions.php` — enqueues the generated `style.css` fallback stylesheet and `assets/js/reveal.js`, and bootstraps the `html.js` class for the reveal CSS.
-- `assets/block-theme-skeleton/assets/js/reveal.js` — one-shot scroll-reveal replayer (IntersectionObserver adds `is-revealed` once per element; everything stays visible without JS or under reduced motion). Pairs with the reveal CSS block in the skeleton `style.css`.
+- `assets/block-theme-skeleton/functions.php` — enqueues the generated `style.css` fallback stylesheet and `assets/js/reveal.js`, and bootstraps the `html.js` class the reveal CSS is gated on. Both are guarded on `reveal.js` actually existing, and the head script arms a 2.5s watchdog that strips `html.js` again unless `reveal.js` set `reveal-ready` — so a 404, parse error, or CSP block degrades to "no animation" instead of "content permanently invisible".
+- `assets/block-theme-skeleton/assets/js/reveal.js` — one-shot scroll-reveal replayer (IntersectionObserver adds `is-revealed` once per element; everything stays visible without JS or under reduced motion). Pairs with the reveal CSS block in the skeleton `style.css`. Its first statement sets `reveal-ready`, which disarms the `functions.php` watchdog — **never** move that below an early return.
 - `assets/blueprint-template.json` — Studio-compatible Blueprint setup for the static front page and site title.
 
 ## What NOT to do

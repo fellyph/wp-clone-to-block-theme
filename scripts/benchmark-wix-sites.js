@@ -23,8 +23,32 @@
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
-const { PNG } = require('pngjs');
+// playwright and pngjs are optional dependencies — resolved lazily so that
+// merely loading this file (e.g. `node --check`, or another script requiring
+// it) never throws on a machine that has not installed them.
+let chromium = null;
+let PNG = null;
+
+function loadDeps() {
+  const missing = [];
+  for (const [name, assign] of [
+    ['playwright', (m) => { chromium = m.chromium; }],
+    ['pngjs', (m) => { PNG = m.PNG; }],
+  ]) {
+    try {
+      assign(require(require.resolve(name, { paths: [__dirname, process.cwd()] })));
+    } catch (e) {
+      missing.push(name);
+    }
+  }
+  if (missing.length) {
+    process.stderr.write(
+      `Missing optional dependencies: ${missing.join(', ')}\n` +
+      `Run: npm i ${missing.join(' ')}${missing.includes('playwright') ? ' && npx playwright install chromium' : ''}\n`
+    );
+    process.exit(2);
+  }
+}
 
 const sitesPath = path.resolve(process.argv[2] || '');
 const outRoot = path.resolve(process.argv[3] || './benchmarks/wix-5');
@@ -287,6 +311,7 @@ async function main() {
   if (!sitesPath || !fs.existsSync(sitesPath)) {
     throw new Error('Provide a sites.json file as the first argument.');
   }
+  loadDeps();
   const sites = JSON.parse(fs.readFileSync(sitesPath, 'utf8'));
   ensureDir(outRoot);
 
