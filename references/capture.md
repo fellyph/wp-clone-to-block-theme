@@ -2,8 +2,9 @@
 
 Capture a page into `./clones/<slug>/.capture/` so the rest of the workflow can work from stable local artifacts. The capture produces:
 
-- `desktop.png`, `mobile.png` — full-page settled screenshots at 1440 and 390
-- `motion-start.png`, `motion-end.png` — initial desktop viewport frames for visible entry/motion comparison
+- `motion/` — scroll recording of the page (video + per-step settled frames + `manifest.json`), from `scripts/record-scroll.js` or the MCP fallback in §2. This is the visual source of truth for animated sites.
+- `desktop.png`, `mobile.png` — full-page settled screenshots at 1440 and 390, taken **after** the stepped-scroll pass so scroll-triggered animations have fired
+- `motion-start.png`, `motion-end.png` — initial desktop viewport frames for visible entry/motion comparison (superseded by `motion/settled/step-NN.png` when the scroll recording ran)
 - `analysis.json` — top-level tokens, sections, nav, image inventory, and motion inventory (from `scripts/extract.js`)
 - `sections/<n>.json` — one per section, full DOM tree + computed styles + text + images (from `scripts/extract-section.js`)
 - `assets/img-NN.ext` — every image downloaded from its CDN while the URL is still valid
@@ -18,11 +19,15 @@ mcp__chrome-devtools__new_page { url: "<url>" }
 mcp__chrome-devtools__resize_page { width: 1440, height: 900 }
 ```
 
-Many modern sites are JS-rendered and lazy-load heavily. Stabilize with a combined script that waits, walks the page in viewport-sized steps to hydrate lazy sections, then scrolls back to the top. A single jump to the bottom is not enough for Wix portfolio pages that reveal each project only when its band enters the viewport:
+Many modern sites are JS-rendered, lazy-load heavily, and gate animations behind IntersectionObserver — a section's fade-in only fires when it scrolls into view. Stabilize with a combined script that waits, walks the page in viewport-sized steps to hydrate lazy sections **and let each step's animations settle**, then scrolls back to the top. A single jump to the bottom is not enough for Wix portfolio pages that reveal each project only when its band enters the viewport:
 
 ```
-mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 2500)); let previousHeight = 0; let h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); const step = Math.max(420, Math.floor(window.innerHeight * 0.72)); for (let pass = 0; pass < 2; pass++) { for (let y = 0; y <= h + window.innerHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 220)); h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); } if (h === previousHeight) break; previousHeight = h; } window.scrollTo(0, 0); await new Promise(r => setTimeout(r, 700)); return { title: document.title, h, images: Array.from(document.images).filter(img => img.complete && img.naturalWidth > 0).length }; }" }
+mcp__chrome-devtools__evaluate_script { function: "async () => { const settle = async () => { const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => setTimeout(r, 100)); } await new Promise(r => setTimeout(r, 300)); }; await new Promise(r => setTimeout(r, 2500)); let previousHeight = 0; let h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); const step = Math.max(420, Math.floor(window.innerHeight * 0.72)); for (let pass = 0; pass < 2; pass++) { for (let y = 0; y <= h + window.innerHeight; y += step) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 220)); await settle(); h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight); } if (h === previousHeight) break; previousHeight = h; } window.scrollTo(0, 0); await settle(); return { title: document.title, h, images: Array.from(document.images).filter(img => img.complete && img.naturalWidth > 0).length }; }" }
 ```
+
+The `iterations !== Infinity` filter matters: marquees and looping spinners never finish, and without it the settle loop would always hit the timeout.
+
+The poll waits on `setTimeout`, never `requestAnimationFrame`. Chrome freezes rAF entirely in a backgrounded tab, so an rAF-driven loop never reaches its own `Date.now()` deadline and `evaluate_script` hangs until the MCP call times out. `setTimeout` is throttled when hidden but always fires. Keep this identical in every copy of the settle snippet (`scripts/extract-section.js`, `scripts/record-scroll.js`, and both snippets in this file).
 
 If the settled screenshot shows content that `analysis.json.images[]` missed, or if mid-page crops are blank where section headings/assets are known to exist, rerun extraction after this stepped-scroll pass and replace `analysis.json` before downloading assets. Treat the screenshot as the authority: missing lazy image inventory is a capture failure, not a sparse design.
 
@@ -30,7 +35,42 @@ If a cookie/privacy banner is visible, take a snapshot, locate its dismiss/accep
 
 Cookie/banner text to look for before screenshots: `we use cookies`, `accept cookies`, `cookie settings`, `decline all`, `privacy policy`.
 
-## 2. Screenshots
+## 2. Motion capture (scroll recording)
+
+Animated sites — fade-in heroes, scroll-triggered reveals, parallax, carousels (see the motion classes in `references/animation-capture.md`) — cannot be trusted to a single screenshot: the snapshot lands mid-tween and the design brief inherits ghosted text and half-faded images. Record a top-to-bottom scroll instead and use the **settled frames** as the per-section visual reference.
+
+**Primary path — `scripts/record-scroll.js` (Playwright, separate headless browser):**
+
+```bash
+node <skill-path>/scripts/record-scroll.js "<url>" "./clones/<slug>/.capture/motion" --width 1440 --height 900
+```
+
+One-time dependency (install in the clone workspace, not the skill directory): `npm i playwright && npx playwright install chromium`. **ffmpeg is not required** — it is only used by the optional `--keyframes` sweep. The script:
+
+- dismisses any cookie/consent/promo banner first. The recorder is a *separate* headless browser from the MCP tab, so the banner you dismissed in §1 is still present here; left alone it would appear in every settled frame while `desktop.png` shows none. Override with `--dismiss-selector <css>`, or keep the banner deliberately with `--keep-banner`;
+- takes an **animation census** before scrolling — `document.getAnimations()` plus reveal-library markers (`[data-aos]`, `.wow`, `[data-scroll]`, `[data-framer-appear-id]`, `[data-w-id]`, Wix motion attributes) — saved into the manifest;
+- smooth-scrolls top→bottom in ~85%-viewport steps, waits at each step for finite animations to settle, then writes `motion/settled/step-NN.png` **directly from `page.screenshot()`** — pixel-exact at the moment the settle poll returned, not re-seeked out of a lossy video. These are the per-section visual references;
+- re-measures page height at every step, so lazy-growing builder pages are followed to the real bottom rather than the height read once at load. Bounded by `--max-steps` (default 40) and `--budget-ms` (default 180000); whichever limit stops the pass is recorded in `manifest.notes`;
+- records `motion/scroll.webm` alongside as a human-reviewable artifact. `--keyframes` additionally dumps `motion/frames/frame_NNNN.png` at `--fps` (needs ffmpeg) — off by default, since nothing downstream reads them;
+- writes `motion/manifest.json`: per-step `scrollY`, `viewportBand`, `pageHeightAtStep`, `settled`, `settledFrame`, plus the census, `bannerDismissal`, `hasMotion`, and `notes`.
+
+Exit codes: `0` = success; `1` = fatal; `2` = Playwright missing → use the fallback below; `4` = no scroll steps recorded, the capture produced nothing usable (check `manifest.notes` for the navigation error).
+
+Verify the recording before moving on — this is one command and it gates every expensive step after it:
+
+```bash
+node <skill-path>/scripts/check-motion-manifest.js "./clones/<slug>/.capture/motion"
+```
+
+It asserts monotonic `scrollY`, non-shrinking `pageHeightAtStep`, that the pass reached the bottom, that one settled frame exists per step at exactly the viewport size, and warns when more than 30% of steps never settled.
+
+**Fallback path — screenshot burst via chrome-devtools MCP (no extra dependencies):**
+
+In the already-open MCP tab, repeat for each scroll step (~85% of viewport height): `evaluate_script` to `window.scrollTo(0, y)` + run the same settle poll from §1, then `take_screenshot` (viewport, NOT fullPage) to `.capture/motion/settled/step-NN.png`. Afterward write `.capture/motion/manifest.json` by hand with the same shape the script produces (`video: null`, `steps[]` with `scrollY` + `settledFrame`, `census` from a one-off `evaluate_script` that returns `document.getAnimations()` info, `hasMotion`). Downstream steps read only the manifest and the settled frames, so they never need to know which path produced them.
+
+**Static fast path:** if the census reports no finite animations and no reveal markers (`hasMotion: false`), skip frame study entirely — the full-page screenshots in §2b are sufficient and the workflow proceeds exactly as it did for static sites.
+
+## 2b. Screenshots
 
 Initial motion frames, before the final stabilization pass:
 ```
@@ -39,6 +79,8 @@ mcp__chrome-devtools__take_screenshot { fullPage: false, filePath: ".capture/<sl
 mcp__chrome-devtools__evaluate_script { function: "async () => { await new Promise(r => setTimeout(r, 1500)); return document.title; }" }
 mcp__chrome-devtools__take_screenshot { fullPage: false, filePath: ".capture/<slug>/motion-end.png" }
 ```
+
+Take the full-page screenshots **after** the stepped scroll in §1 (and after §2's recording if you used the MCP fallback in the same tab) — by then every scroll-triggered reveal has fired and the page is in its final, fully-revealed state. A screenshot taken before the scroll pass captures pre-animation opacity-0 elements as blank gaps.
 
 Full-page desktop:
 ```
@@ -218,6 +260,14 @@ Step 2's foundation step then:
 
 For each section in `analysis.json.sections[]`, run `scripts/extract-section.js` against its Y band. This returns the full DOM tree, computed styles, text content, and image inventory for **just that section**, which becomes the source of truth for the spec file in step 3 of `SKILL.md`.
 
+**Settle before extracting.** The extractor reads computed styles — if a reveal animation is mid-tween, you capture `opacity: 0.4` and a half-translated `transform` instead of the design's final values. Before each call, scroll the band into view and wait for animations to finish (the extractor itself also re-runs this settle internally, but pre-scrolling fires the section's IntersectionObserver so there is something to settle):
+
+```
+mcp__chrome-devtools__evaluate_script { function: "async () => { window.scrollTo(0, <top> - 100); await new Promise(r => setTimeout(r, 400)); const t0 = Date.now(); while (Date.now() - t0 < 3000) { const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.getTiming().iterations !== Infinity); if (running.length === 0) break; await new Promise(r => setTimeout(r, 100)); } await new Promise(r => setTimeout(r, 300)); return window.scrollY; }" }
+```
+
+Then run the extractor:
+
 ```
 mcp__chrome-devtools__evaluate_script {
   function: "<contents of scripts/extract-section.js>",
@@ -254,6 +304,8 @@ Each `sections/<n>.json` has this shape:
   }
 }
 ```
+
+The node-level `motion` fields inside `tree` feed the spec's Motion profile (see `references/animation-capture.md` and `references/spec-files.md`). Cross-check them against `.capture/motion/manifest.json`'s census — the manifest sees load-time animations the per-section pass may have missed (they finished before extraction), while the tree sees scroll-triggered ones precisely per band.
 
 The `flat` array is a shortcut — it's pre-extracted from `tree` and holds the content you'll fill into spec files. `tree` is there for when `flat` isn't enough (e.g. deciding whether two adjacent children are a media-text pair or a column pair based on their parent's `flexDirection`).
 

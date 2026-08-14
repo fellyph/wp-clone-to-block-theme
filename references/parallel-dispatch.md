@@ -54,14 +54,19 @@ You are generating one WP block pattern from a pre-extracted spec.
 Working directory: {{ABSOLUTE_WORKTREE_PATH}}
 Spec file:         specs/section-{{N}}-{{TYPE}}.md
 Per-section JSON:  .capture/sections/{{N}}.json
-References:        {{SKILL_PATH}}/references/section-mapping.md, theme-tokens.md
+Visual reference:  {{SETTLED_FRAME_PATH}}  (the settled frame named in the spec's Motion profile —
+                   this shows the section in its final, post-animation state; trust it over any
+                   crop of the full-page screenshot)
+References:        {{SKILL_PATH}}/references/section-mapping.md, theme-tokens.md, block-markup-quality.md
 Foundation:        theme/theme.json, theme/style.css, theme/assets/  (read-only for this task)
 
 Your task:
 1. Read the spec. Confirm its `Interaction model` field names a template that exists in `section-mapping.md`.
-2. Pick the cover-variant vs light-variant where applicable, using the brightness value the spec recorded.
-3. Fill every `{{placeholder}}` from the spec's `Generation instructions` section. Use verbatim captured text and local `assets/img-NN.<ext>` paths — never a remote URL.
-4. Wrap the result in the standard pattern-file header:
+2. Look at the visual reference frame. Your pattern must reproduce what that frame shows — the
+   spec's Motion profile tells you whether the source animates and what state the frame represents.
+3. Pick the cover-variant vs light-variant where applicable, using the brightness value the spec recorded.
+4. Fill every `{{placeholder}}` from the spec's `Generation instructions` section. Use verbatim captured text and local `assets/img-NN.<ext>` paths — never a remote URL.
+5. Wrap the result in the standard pattern-file header:
    <?php
    /**
     * Title: {{HUMAN_READABLE_TITLE}}
@@ -69,18 +74,27 @@ Your task:
     * Categories: featured
     */
    ?>
-5. Write the output to `theme/patterns/section-{{N}}.php`. Do not touch any other file.
-6. Run the build gate from the worktree root:
+6. Write the output to `theme/patterns/section-{{N}}.php`. Do not touch any other file.
+7. Validate the block markup per `block-markup-quality.md`: if the `mcp__wp-blockmarkup__validate_markup`
+   tool is available, run it on the pattern's markup (substitute the PHP image echoes with a plain
+   path first) and fix every reported error before committing; if the tool is not available, walk
+   the pre-commit checklist at the end of `block-markup-quality.md` line by line.
+8. Run the build gate from the worktree root:
    php -l theme/patterns/section-{{N}}.php
    python3 -c "import json; j = json.load(open('theme/theme.json')); assert j['version'] == 3"
-7. Commit with `git add theme/patterns/section-{{N}}.php && git commit -m "section-{{N}}: {{TYPE}}"`.
+9. Commit with `git add theme/patterns/section-{{N}}.php && git commit -m "section-{{N}}: {{TYPE}}"`.
 
 Output constraints:
 - No placeholder text. If a `{{placeholder}}` can't be filled from the spec, stop and report the missing field — do not invent content.
 - No remote URLs in block markup. Every image path must route through `<?php echo esc_url( get_theme_file_uri('assets/img-NN.<ext>') ); ?>`.
+- Content reproduces the settled state. Entry reveals are added via the spec Motion profile's
+  Reveal classes (`reveal` + `reveal-fade` / `reveal-slide-up` / `reveal-rise` in the blocks'
+  `className`) — the theme's reveal.js replays them on scroll. Do not write custom CSS
+  animations or inline keyframes into the pattern.
 - No modifications outside `theme/patterns/section-{{N}}.php`.
 
-Report back: absolute path of the file you created, the template you used, and the commit hash.
+Report back: absolute path of the file you created, the template you used, how markup was
+validated (MCP or checklist), and the commit hash.
 ```
 
 ## Merge procedure (orchestrator)

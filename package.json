@@ -1,0 +1,20 @@
+{
+  "name": "liberate-it",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clone a public website into a WordPress block theme. Skill support scripts.",
+  "license": "GPL-2.0-or-later",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node --check scripts/extract.js && node --check scripts/extract-section.js && node --check scripts/record-scroll.js && node --check scripts/validate-artifacts.js && node --check scripts/studio-site.js && node --check scripts/download-assets.js && node --check scripts/benchmark-wix-sites.js && node --check scripts/check-motion-manifest.js",
+    "validate": "node scripts/validate-artifacts.js",
+    "motion-check": "node scripts/check-motion-manifest.js"
+  },
+  "//optionalDependencies": "Not plain dependencies: the skill must stay installable without a ~200MB browser download. record-scroll.js and benchmark-wix-sites.js detect their absence and exit 2 with install instructions.",
+  "optionalDependencies": {
+    "playwright": "^1.62.0",
+    "pngjs": "^7.0.0"
+  }
+}

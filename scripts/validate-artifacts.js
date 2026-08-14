@@ -13,12 +13,22 @@
 const fs = require('fs');
 const path = require('path');
 
-const cloneRoot = path.resolve(process.argv[2] || process.cwd());
+const argv = process.argv.slice(2);
+// Motion checks are advisory by default so the first run on a clone captured
+// before the motion pipeline existed does not hard-fail. Pass --strict-motion
+// (or set LIBERATE_STRICT_MOTION=1) to promote them to errors once a clean run
+// has passed — see references/pipeline-test.md.
+const strictMotion = argv.includes('--strict-motion') || process.env.LIBERATE_STRICT_MOTION === '1';
+const cloneRoot = path.resolve(argv.find((a) => !a.startsWith('--')) || process.cwd());
 const skillRoot = path.resolve(__dirname, '..');
 const errors = [];
 const warnings = [];
 
-const allowedInteractionModels = new Set([
+// The canonical list lives in references/spec-files.md and is parsed at run
+// time by loadInteractionModels(). This copy is the fallback for a detached
+// checkout — a mismatch between the two is itself a validation error, so the
+// list cannot silently drift across SKILL.md / spec-files.md / this file.
+const FALLBACK_INTERACTION_MODELS = new Set([
   'static',
   'gallery',
   'media-text',
@@ -58,12 +68,38 @@ function warn(filePath, message) {
   warnings.push(`${rel(filePath)}: ${message}`);
 }
 
+/** Every CSS class token appearing in a `className":"..."` or `class="..."`. */
+function classTokens(content) {
+  const out = new Set();
+  const patterns = [/"className"\s*:\s*"([^"]*)"/g, /\bclass="([^"]*)"/g];
+  for (const re of patterns) {
+    for (const match of content.matchAll(re)) {
+      for (const token of match[1].split(/\s+/)) if (token) out.add(token);
+    }
+  }
+  return out;
+}
+
+function motionIssue(filePath, message) {
+  (strictMotion ? fail : warn)(filePath, `${message}${strictMotion ? '' : ' [motion check — advisory, run with --strict-motion to enforce]'}`);
+}
+
 function unique(items) {
   return [...new Set(items.filter(Boolean))];
 }
 
 function stripTags(value) {
-  return value.replace(/<[^>]+>/g, ' ');
+  // Neutralise PHP delimiters BEFORE stripping HTML tags. `<?php … ?>` looks
+  // like one enormous unclosed tag to /<[^>]+>/, so stripping tags first would
+  // delete the entire PHP block — and with it any content the pattern holds in
+  // a variable or array (a legitimate way to write a repeated card/row list).
+  // The heading and CTA checks would then fail on markup that is perfectly
+  // correct once rendered.
+  return value
+    .replace(/<\?php/g, ' ')
+    .replace(/<\?=/g, ' ')
+    .replace(/\?>/g, ' ')
+    .replace(/<[^>]+>/g, ' ');
 }
 
 function decodeEntities(value) {
@@ -94,6 +130,39 @@ function extractAssets(content) {
     [...content.matchAll(/assets\/(?:img-\d+\.(?:jpe?g|png|webp|gif|avif)|placeholder-[\w.-]+\.svg)/gi)]
       .map((match) => match[0])
   );
+}
+
+const MOTION_CLASSES = new Set([
+  'none', 'css-transition', 'css-keyframes', 'entry-reveal', 'marquee',
+  'carousel', 'parallax', 'video', 'lottie', 'scroll-triggered',
+]);
+
+// The skeleton's style.css defines exactly these three; anything else is a
+// class the CSS never un-hides, i.e. content invisible forever.
+const REVEAL_VARIANTS = new Set(['reveal-fade', 'reveal-slide-up', 'reveal-rise']);
+
+function loadInteractionModels() {
+  const specTemplate = path.join(skillRoot, 'references', 'spec-files.md');
+  if (!exists(specTemplate)) return FALLBACK_INTERACTION_MODELS;
+  const line = read(specTemplate)
+    .split('\n')
+    .find((l) => /\*\*Interaction model:\*\*/i.test(l));
+  const inner = line && line.match(/<([^>]+)>/);
+  if (!inner) return FALLBACK_INTERACTION_MODELS;
+
+  const parsed = new Set(inner[1].split('|').map((v) => v.trim()).filter(Boolean));
+  const onlyInDoc = [...parsed].filter((v) => !FALLBACK_INTERACTION_MODELS.has(v));
+  const onlyInCode = [...FALLBACK_INTERACTION_MODELS].filter((v) => !parsed.has(v));
+  if (onlyInDoc.length || onlyInCode.length) {
+    fail(
+      specTemplate,
+      'interaction model list has drifted from scripts/validate-artifacts.js' +
+      `${onlyInDoc.length ? ` — only in spec-files.md: ${onlyInDoc.join(', ')}` : ''}` +
+      `${onlyInCode.length ? ` — only in validate-artifacts.js: ${onlyInCode.join(', ')}` : ''}` +
+      ' (SKILL.md carries a third copy — update all three)'
+    );
+  }
+  return parsed;
 }
 
 function loadTemplateNames() {
@@ -128,7 +197,133 @@ function validateNoDecorativeHtmlComments(filePath, content) {
   }
 }
 
-function parseSpec(specPath, content, templateNames) {
+/**
+ * Enforce the Motion profile block of references/spec-files.md. Pre-dispatch
+ * checklist item 8 asks for these fields; nothing verified them until now, so
+ * a spec could name a settled frame that was never produced and the builder
+ * would silently fall back to cropping desktop.png.
+ */
+function validateMotionProfile(specPath, content) {
+  const classMatch = content.match(/\*\*Motion class:\*\*\s*([^\n]+)/i);
+  if (!classMatch) {
+    motionIssue(specPath, 'missing **Motion class:** in the Motion profile');
+    return { motionClass: null, revealClasses: [] };
+  }
+  const motionClass = classMatch[1].replace(/[`*]/g, '').split(/[<(]/)[0].trim();
+  if (!MOTION_CLASSES.has(motionClass)) {
+    motionIssue(specPath, `unknown motion class "${motionClass}" (expected one of ${[...MOTION_CLASSES].join(', ')})`);
+  }
+
+  const value = (label) => {
+    const m = content.match(new RegExp(`\\*\\*${label}:\\*\\*\\s*([^\\n]+)`, 'i'));
+    if (!m) return null;
+    const v = m[1].replace(/[`*]/g, '').replace(/<[^>]*>/g, '').trim();
+    return v || null;
+  };
+
+  const settledFrame = value('Settled frame');
+  const revealRaw = value('Reveal classes');
+
+  if (motionClass !== 'none') {
+    if (!settledFrame) motionIssue(specPath, 'motion class is not "none" but **Settled frame:** is empty');
+    if (!revealRaw) motionIssue(specPath, 'motion class is not "none" but **Reveal classes:** is empty');
+  }
+
+  // A named frame must actually be on disk, relative to the clone root.
+  if (settledFrame && !/^n\/?a$/i.test(settledFrame)) {
+    const framePath = settledFrame.match(/\.capture\/motion\/settled\/[\w.-]+\.png/);
+    if (framePath && !exists(path.join(cloneRoot, framePath[0]))) {
+      motionIssue(specPath, `**Settled frame:** points at ${framePath[0]}, which does not exist`);
+    }
+  }
+
+  const revealClasses = revealRaw && !/^n\/?a$/i.test(revealRaw)
+    ? unique([...revealRaw.matchAll(/\breveal(?:-[a-z-]+)?\b/g)].map((m) => m[0]))
+    : [];
+  for (const cls of revealClasses) {
+    if (cls !== 'reveal' && !REVEAL_VARIANTS.has(cls)) {
+      motionIssue(specPath, `unknown reveal variant "${cls}" — the skeleton CSS only defines ${[...REVEAL_VARIANTS].join(', ')}, so anything else stays hidden`);
+    }
+  }
+
+  return { motionClass, revealClasses };
+}
+
+/**
+ * If any pattern actually uses the reveal system, the theme must ship the whole
+ * mechanism. A pattern with `class="reveal"` and no reveal.js is content that
+ * never appears.
+ */
+function validateRevealWiring(patternPaths) {
+  const users = [];
+  const variantsUsed = new Set();
+  for (const patternPath of patternPaths) {
+    const tokens = classTokens(read(patternPath));
+    // Exact token match only: a theme-local class like `fc-reveal` is its own
+    // mechanism and must not be mistaken for the skeleton's reveal system.
+    if (!tokens.has('reveal')) continue;
+    users.push(patternPath);
+    for (const t of tokens) if (/^reveal-/.test(t)) variantsUsed.add(t);
+  }
+  if (users.length === 0) return;
+
+  const revealJs = path.join(themeDir, 'assets', 'js', 'reveal.js');
+  const styleCss = path.join(themeDir, 'style.css');
+  const functionsPhp = path.join(themeDir, 'functions.php');
+
+  if (!exists(revealJs)) {
+    motionIssue(revealJs, `${users.length} pattern(s) use the reveal system but theme/assets/js/reveal.js is missing — those blocks would stay hidden`);
+  }
+  if (exists(styleCss)) {
+    const css = read(styleCss);
+    if (!css.includes('.reveal') || !css.includes('is-revealed')) {
+      motionIssue(styleCss, 'reveal CSS (.reveal / .is-revealed) missing from theme/style.css');
+    }
+  }
+  if (exists(functionsPhp)) {
+    const php = read(functionsPhp);
+    if (!php.includes('reveal.js')) motionIssue(functionsPhp, 'functions.php does not enqueue assets/js/reveal.js');
+    if (!/classList\.add\('js'\)/.test(php)) motionIssue(functionsPhp, "functions.php does not set the html.js class the reveal CSS is gated on");
+    if (!/reveal-ready/.test(php)) motionIssue(functionsPhp, 'functions.php has no reveal-ready watchdog — a failed reveal.js would hide content permanently');
+  }
+  for (const variant of variantsUsed) {
+    if (!REVEAL_VARIANTS.has(variant)) {
+      motionIssue(patternsDir, `pattern uses undefined reveal variant "${variant}" — no CSS un-hides it`);
+    }
+  }
+}
+
+/** Sanity-check the scroll recording, when one exists. */
+function validateMotionManifest() {
+  const manifestPath = path.join(cloneRoot, '.capture', 'motion', 'manifest.json');
+  if (!exists(manifestPath)) return;
+  let manifest;
+  try {
+    manifest = JSON.parse(read(manifestPath));
+  } catch (error) {
+    fail(manifestPath, `invalid JSON: ${error.message}`);
+    return;
+  }
+  if (manifest.hasMotion !== true) return;
+
+  const steps = Array.isArray(manifest.steps) ? manifest.steps : [];
+  if (steps.length === 0) {
+    motionIssue(manifestPath, 'hasMotion is true but no scroll steps were recorded');
+    return;
+  }
+  const onDisk = steps.filter(
+    (s) => s.settledFrame && exists(path.join(cloneRoot, '.capture', 'motion', s.settledFrame))
+  );
+  if (onDisk.length === 0) {
+    motionIssue(manifestPath, `hasMotion is true but none of the ${steps.length} settled frames exist on disk`);
+  }
+  const unsettled = steps.filter((s) => s.settled === false).length;
+  if (unsettled / steps.length > 0.3) {
+    warn(manifestPath, `${unsettled}/${steps.length} scroll steps never settled — captured styles may be mid-animation`);
+  }
+}
+
+function parseSpec(specPath, content, templateNames, interactionModels) {
   const filename = path.basename(specPath);
   const sectionMatch = filename.match(/^section-(\d+)-/);
   const sectionNumber = sectionMatch ? Number(sectionMatch[1]) : null;
@@ -157,7 +352,7 @@ function parseSpec(specPath, content, templateNames) {
   ]);
 
   if (sectionNumber === null) fail(specPath, 'filename does not start with section-<n>-');
-  if (!allowedInteractionModels.has(interactionModel)) {
+  if (!interactionModels.has(interactionModel)) {
     fail(specPath, `invalid or missing interaction model "${interactionModel || '(empty)'}"`);
   }
   if (!templateName) {
@@ -176,10 +371,13 @@ function parseSpec(specPath, content, templateNames) {
     warn(specPath, 'spec is longer than 180 lines; consider splitting complex sections');
   }
 
+  const motion = validateMotionProfile(specPath, content);
+
   return {
     sectionNumber,
     interactionModel,
     templateName,
+    motion,
     expectedAssets,
     expectsNoImages,
     expectedHeadings,
@@ -247,6 +445,7 @@ const themeDir = path.join(cloneRoot, 'theme');
 const specsDir = path.join(cloneRoot, 'specs');
 const patternsDir = path.join(themeDir, 'patterns');
 const templateNames = loadTemplateNames();
+const interactionModels = loadInteractionModels();
 
 validateJson(path.join(themeDir, 'theme.json'), (theme) => {
   if (theme.version !== 3) throw new Error('theme.json version must be 3');
@@ -270,16 +469,30 @@ if (specPaths.length === 0) {
   fail(specsDir, 'no section spec files found');
 }
 
+const patternPaths = [];
 for (const specPath of specPaths) {
-  const spec = parseSpec(specPath, read(specPath), templateNames);
+  const spec = parseSpec(specPath, read(specPath), templateNames, interactionModels);
   if (spec.sectionNumber === null) continue;
   const patternPath = path.join(patternsDir, `section-${spec.sectionNumber}.php`);
   if (!exists(patternPath)) {
     fail(patternPath, `missing pattern for ${path.basename(specPath)}`);
     continue;
   }
-  validatePattern(spec, patternPath, read(patternPath));
+  const patternContent = read(patternPath);
+  patternPaths.push(patternPath);
+  validatePattern(spec, patternPath, patternContent);
+
+  // The spec is the contract: reveal classes it declares must reach the markup.
+  const patternClasses = classTokens(patternContent);
+  for (const cls of spec.motion.revealClasses) {
+    if (!patternClasses.has(cls)) {
+      motionIssue(patternPath, `spec declares reveal class "${cls}" but the pattern does not use it`);
+    }
+  }
 }
+
+validateRevealWiring(patternPaths);
+validateMotionManifest();
 
 if (warnings.length > 0) {
   console.warn('Artifact validation warnings:');

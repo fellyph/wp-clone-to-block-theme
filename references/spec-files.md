@@ -84,8 +84,10 @@ Small page-builder arrows, checkmarks, service icons, award badges, and social i
 - **Timing:** <duration/delay/easing from `.capture/sections/<n>.json.tree[*].motion`, or n/a>
 - **Start state:** <opacity/transform/position if visible in `motion-start.png`, or n/a>
 - **End state:** <settled final state from `desktop.png`, or n/a>
+- **Settled frame:** `.capture/motion/settled/step-NN.png` <the frame whose scrollY puts this band in the viewport (`scrollY ≤ band.top < scrollY + viewport.height`, from `.capture/motion/manifest.json`) — when present this is the builder's visual reference, NOT a crop of `desktop.png`>
+- **Reveal classes:** <n/a | the `className` values the builder must add, mapped from the captured animation name: fade/fadeIn → `reveal reveal-fade`; slide/slideIn/fadeInUp → `reveal reveal-slide-up`; reveal/revealIn/clip → `reveal reveal-rise`. The pattern's *content* is always the settled (post-animation) state; the skeleton's `assets/js/reveal.js` + reveal CSS replay the entry-reveal on first viewport entry, gated on `html.js` and `prefers-reduced-motion`. Apply the classes at the granularity the source animates — usually the heading/image/card, not the whole section.>
 - **Reduced-motion behavior:** <disable animation and show final state | keep static poster | n/a>
-- **WP reproduction plan:** <theme-scoped CSS class | static fallback with explicit comment | plugin required>
+- **WP reproduction plan:** <skeleton reveal classes | theme-scoped CSS class | static fallback with explicit comment | plugin required>
 
 ## Generation instructions
 
